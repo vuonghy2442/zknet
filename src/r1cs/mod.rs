@@ -8,14 +8,14 @@ use std::ops::{Index};
 
 type Scalar = i32;
 type ScalarAddress = u32;
-type TensorAddress = u32;
+pub type TensorAddress = u32;
 
 union MemAddress {
     block_id: TensorAddress,
     memory_id: ScalarAddress
 }
 
-struct MemoryManager {
+pub struct MemoryManager {
     mem_dict: Vec<VariableTensor>,
     n_var: u32,
 }
@@ -30,7 +30,7 @@ impl MemoryManager {
         }
     }
 
-    fn alloc(&mut self, shape: &[u32]) -> TensorAddress {
+    pub fn alloc(&mut self, shape: &[u32]) -> TensorAddress {
         let var = VariableTensor::new(self.n_var, shape);
         self.n_var += var.size();
         self.mem_dict.push(var);
@@ -63,19 +63,17 @@ impl Index<TensorAddress> for MemoryManager {
 }
 type Memory = [Scalar];
 
-struct ComputationCircuit {
+pub struct ComputationCircuit {
     a: Vec<(u32, u32, i32)>,
     b: Vec<(u32, u32, i32)>,
     c: Vec<(u32, u32, i32)>,
     n_cons: u32,
-    mem: MemoryManager,
+    pub mem: MemoryManager,
     compute: Vec<(Vec<MemAddress>, fn(mem: &MemoryManager, &[MemAddress], &mut Memory))>
 }
 
 impl ComputationCircuit {
-    const ONE_VAR: u32 = 0;
-
-    fn new() -> ComputationCircuit {
+    pub fn new() -> ComputationCircuit {
         ComputationCircuit {
             a: Vec::new(),
             b: Vec::new(),
@@ -86,13 +84,13 @@ impl ComputationCircuit {
         }
     }
 
-    fn sort_cons(&mut self) {
+    pub fn sort_cons(&mut self) {
         self.a.sort();
         self.b.sort();
         self.c.sort();
     }
 
-    fn verify(&self, var_dict: &[Scalar]) -> bool {
+    pub fn verify(&self, var_dict: &[Scalar]) -> bool {
         let (mut ai, mut bi, mut ci) = (0, 0, 0);
         for i in 0..self.n_cons {
             let (mut sa, mut sb, mut sc) = (0, 0, 0);
@@ -116,13 +114,17 @@ impl ComputationCircuit {
         return true;
     }
 
-    fn compute(&self, var_dict: &mut Memory) {
+    pub fn compute(&self, var_dict: &mut Memory) {
         for (params, func) in &self.compute {
             func(&self.mem, &params, var_dict);
         }
     }
 
-    fn mul(&mut self, a: TensorAddress, b: TensorAddress, res: TensorAddress) {
+    pub fn cons_size(&self) -> u32 {
+        return self.n_cons;
+    }
+
+    pub fn mul(&mut self, a: TensorAddress, b: TensorAddress, res: TensorAddress) {
         for (x, y, z) in izip!(self.mem[a].iter(), self.mem[b].iter(), self.mem[res].iter()) {
             self.a.push((self.n_cons, x, 1));
             self.b.push((self.n_cons, y, 1));
@@ -138,7 +140,7 @@ impl ComputationCircuit {
         self.compute.push((vec![MemAddress{block_id: a}, MemAddress{block_id: b}, MemAddress{block_id: res}], run));
     }
 
-    fn sum(&mut self, inp: TensorAddress, out: ScalarAddress, init: Option<u32>) {
+    pub fn sum(&mut self, inp: TensorAddress, out: ScalarAddress, init: Option<u32>) {
         if let Some(x) = init {
             self.a.push((self.n_cons, x, 1));
         }
@@ -164,7 +166,7 @@ impl ComputationCircuit {
         self.compute.push((params, run));
     }
 
-    fn conv2d(&mut self, input: TensorAddress, output: TensorAddress, weight: TensorAddress, bias: Option<(TensorAddress, u32)>) {
+    pub fn conv2d(&mut self, input: TensorAddress, output: TensorAddress, weight: TensorAddress, bias: Option<(TensorAddress, u32)>) {
         let fout = self.mem[weight].dim[0];
         let fin = self.mem[weight].dim[1];
         let kx = self.mem[weight].dim[2];
@@ -188,7 +190,7 @@ impl ComputationCircuit {
     }
 
     // input should have shape with sign, abs, and output should have one more dimension with length bit size
-    fn bit_decomposition(&mut self, input: TensorAddress, output: TensorAddress, sign: TensorAddress, abs: TensorAddress) {
+    pub fn bit_decomposition(&mut self, input: TensorAddress, output: TensorAddress, sign: TensorAddress, abs: TensorAddress) {
         let mut iter = self.mem[input].iter();
         loop {
             let x = iter.next();
@@ -258,7 +260,7 @@ impl ComputationCircuit {
         self.compute.push((params, run));
     }
 
-    fn sign(&mut self, input: TensorAddress, output: TensorAddress, max_bits: u8) {
+    pub fn sign(&mut self, input: TensorAddress, output: TensorAddress, max_bits: u8) {
         let mut dim = self.mem[input].dim.clone();
         let abs = self.mem.alloc(&dim);
         dim.push(max_bits as u32);
@@ -266,7 +268,7 @@ impl ComputationCircuit {
         self.bit_decomposition(input, bits, output, abs);
     }
 
-    fn relu(&mut self, input: TensorAddress, output: TensorAddress, max_bits: u8) {
+    pub fn relu(&mut self, input: TensorAddress, output: TensorAddress, max_bits: u8) {
         let mut dim = self.mem[input].dim.clone();
         let abs = self.mem.alloc(&dim);
         let sign = self.mem.alloc(&dim);
@@ -292,7 +294,7 @@ impl ComputationCircuit {
     }
 
     // input tensor 3d
-    fn binary_max_pool(&mut self, input: TensorAddress, output: TensorAddress) {
+    pub fn binary_max_pool(&mut self, input: TensorAddress, output: TensorAddress) {
         let mut dim = self.mem[input].dim.clone();
         dim.push(2);
         let temp = self.mem.alloc(&dim);
@@ -342,7 +344,7 @@ impl ComputationCircuit {
         self.compute.push((params, run));
     }
 
-    fn fully_connected(&mut self, input: TensorAddress, output: TensorAddress, weight: TensorAddress, bias: Option<TensorAddress>) {
+    pub fn fully_connected(&mut self, input: TensorAddress, output: TensorAddress, weight: TensorAddress, bias: Option<TensorAddress>) {
         let temp = self.mem.alloc(&self.mem[weight].dim.clone());
         for i in 0..self.mem[weight].dim[0] {
             let temp = self.mem.save(self.mem[temp].at_(&[i]));
