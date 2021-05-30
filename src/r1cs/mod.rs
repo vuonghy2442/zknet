@@ -85,9 +85,9 @@ impl ComputationCircuit {
     }
 
     pub fn sort_cons(&mut self) {
-        self.a.sort();
-        self.b.sort();
-        self.c.sort();
+        self.a.sort_unstable();
+        self.b.sort_unstable();
+        self.c.sort_unstable();
     }
 
     pub fn verify(&self, var_dict: &[Scalar]) -> bool {
