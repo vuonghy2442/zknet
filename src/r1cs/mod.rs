@@ -211,6 +211,7 @@ impl ComputationCircuit {
             self.a.push((self.n_cons, sign, 1));
             self.b.push((self.n_cons, sign, 1));
             self.c.push((self.n_cons, MemoryManager::ONE_VAR, 1));
+            self.n_cons += 1;
 
             let sum_cons = self.n_cons;
             self.n_cons += 1;
@@ -229,7 +230,8 @@ impl ComputationCircuit {
         }
 
         fn run(mem: &MemoryManager, param: &[MemAddress], var_dict: &mut Memory) {
-            let mut iter = mem[unsafe{param[0].block_id}].iter();
+            let (input, output, sign, abs) = unsafe{(param[0].block_id, param[1].block_id, param[2].block_id, param[3].block_id)};
+            let mut iter = mem[input].iter();
             loop {
                 let x = iter.next();
                 if let None = x {
@@ -237,14 +239,14 @@ impl ComputationCircuit {
                 }
                 let x = var_dict[x.unwrap() as usize];
                 let idx = &iter.idx;
-                let bits = mem[unsafe {param[1].block_id}].at_(idx);
-                let abs = mem[unsafe {param[2].block_id}].at_idx(idx);
-                let sign = mem[unsafe {param[3].block_id}].at_idx(idx);
+                let bits = mem[output].at_(idx);
+                let sign = mem[sign].at_idx(idx);
+                let abs = mem[abs].at_idx(idx);
 
                 var_dict[abs as usize] = x.abs();
                 var_dict[sign as usize] = if x >= 0 {1} else {-1};
 
-                let mut x = x;
+                let mut x = x.abs();
                 for bit in bits.iter() {
                     var_dict[bit as usize] = x % 2;
                     x /= 2;
@@ -252,7 +254,7 @@ impl ComputationCircuit {
                 assert_eq!(x, 0);
             }
         }
-        let params = vec![MemAddress{block_id: input}, MemAddress{memory_id: output}, MemAddress{memory_id: sign}, MemAddress{memory_id: abs}];
+        let params = vec![MemAddress{block_id: input}, MemAddress{block_id: output}, MemAddress{block_id: sign}, MemAddress{block_id: abs}];
         self.compute.push((params, run));
     }
 
@@ -285,7 +287,7 @@ impl ComputationCircuit {
                 var_dict[output as usize] = if x >= 0 {x} else {0};
             }
         }
-        let params = vec![MemAddress{block_id: input}, MemAddress{memory_id: output}];
+        let params = vec![MemAddress{block_id: input}, MemAddress{block_id: output}];
         self.compute.push((params, run));
     }
 
@@ -295,7 +297,7 @@ impl ComputationCircuit {
         dim.push(2);
         let temp = self.mem.alloc(&dim);
         for layer in 0..self.mem[input].dim[0] {
-            let input = self.mem[output].at_(&[layer]);
+            let input = self.mem[input].at_(&[layer]);
             let output = self.mem[output].at_(&[layer]);
             for i in 0..input.dim[0]/2 {
                 for j in 0..input.dim[1]/2 {
@@ -312,6 +314,7 @@ impl ComputationCircuit {
                     self.b.push((self.n_cons, t[0], 1));
                     self.c.push((self.n_cons,  output.at_idx(&[i,j]), -2));
                     self.c.push((self.n_cons,  MemoryManager::ONE_VAR, 2));
+                    self.n_cons += 1;
                 }
             }
         }
@@ -319,22 +322,37 @@ impl ComputationCircuit {
         fn run(mem: &MemoryManager, param: &[MemAddress], var_dict: &mut Memory) {
             let (input, output, temp) = unsafe{(param[0].block_id, param[1].block_id, param[2].block_id)};
             for layer in 0..mem[input].dim[0] {
-                let input = mem[output].at_(&[layer]);
+                let input = mem[input].at_(&[layer]);
                 let output = mem[output].at_(&[layer]);
                 for i in 0..input.dim[0]/2 {
                     for j in 0..input.dim[1]/2 {
                         let t = [mem[temp].at_idx(&[layer, i, j, 0]), mem[temp].at_idx(&[layer, i, j, 1])];
+                        let mut val = [0,0];
                         for k in 0..2 {
-                            var_dict[t[k] as usize] = (var_dict[input.at_idx(&[2*i + k as u32, 2*j]) as usize] - 1)
+                            val[k] = (var_dict[input.at_idx(&[2*i + k as u32, 2*j]) as usize] - 1)
                                     *(var_dict[input.at_idx(&[2*i + k as u32, 2*j + 1]) as usize] - 1) /2;
+                            var_dict[t[k] as usize] = val[k];
                         }
-                        var_dict[output.at_idx(&[i,j]) as usize] = -var_dict[t[0] as usize] * var_dict[t[1] as usize]/2 + 1;
+                        var_dict[output.at_idx(&[i,j]) as usize] = -val[0] * val[1]/2 + 1;
                     }
                 }
             }
         }
-        let params = vec![MemAddress{block_id: input}, MemAddress{memory_id: output}, MemAddress{memory_id: temp}];
+        let params = vec![MemAddress{block_id: input}, MemAddress{block_id: output}, MemAddress{block_id: temp}];
         self.compute.push((params, run));
+    }
+
+    fn fully_connected(&mut self, input: TensorAddress, output: TensorAddress, weight: TensorAddress, bias: Option<TensorAddress>) {
+        let temp = self.mem.alloc(&self.mem[weight].dim.clone());
+        for i in 0..self.mem[weight].dim[0] {
+            let temp = self.mem.save(self.mem[temp].at_(&[i]));
+            let weight = self.mem.save(self.mem[weight].at_(&[i]));
+            self.mul(weight, input, temp);
+            match bias {
+                Some(b) => self.sum(temp, self.mem[output].at_idx(&[i]), Some(self.mem[b].at_idx(&[i]))),
+                None => self.sum(temp, self.mem[output].at_idx(&[i]), None)
+            }
+        }
     }
 }
 
@@ -388,6 +406,66 @@ mod tests {
 
         x.compute(&mut mem);
         assert_eq!(mem[87..87+18], [32,3,-36,-27,-9,59,44,-21,-16,-23,25,-4,-24,-8,21,-15,-33,-1]);
+        x.sort_cons();
+        assert!(x.verify(&mem));
+    }
+
+    #[test]
+    fn sign_test() {
+        let mut x = ComputationCircuit::new();
+        let input = x.mem.alloc(&[2,2]);
+        let output = x.mem.alloc(&[2,2]);
+        x.sign(input, output, 3);
+        let mut mem = x.mem.new_memory();
+        mem[1..5].copy_from_slice(&[5,-2,3,-4]);
+        x.compute(&mut mem);
+        assert_eq!(mem[5..9],[1,-1,1,-1]);
+        x.sort_cons();
+        assert!(x.verify(&mem));
+    }
+
+    #[test]
+    fn relu_test() {
+        let mut x = ComputationCircuit::new();
+        let input = x.mem.alloc(&[2,2]);
+        let output = x.mem.alloc(&[2,2]);
+        x.relu(input, output, 3);
+        let mut mem = x.mem.new_memory();
+        mem[1..5].copy_from_slice(&[5,-2,3,-4]);
+        x.compute(&mut mem);
+        assert_eq!(mem[5..9],[5,0,3,0]);
+        x.sort_cons();
+        assert!(x.verify(&mem));
+    }
+
+    #[test]
+    fn max_pool_test() {
+        let mut x = ComputationCircuit::new();
+        let input = x.mem.alloc(&[2,2,4]);
+        let output = x.mem.alloc(&[2,1,2]);
+        x.binary_max_pool(input, output);
+        let mut mem = x.mem.new_memory();
+        mem[1..17].copy_from_slice(&[1, 1, -1, -1, -1, 1, -1, -1, 1, -1, 1, -1, 1, 1, -1, -1]);
+        x.compute(&mut mem);
+        assert_eq!(mem[17..21],[1,-1,1,1]);
+        x.sort_cons();
+        assert!(x.verify(&mem));
+    }
+
+    #[test]
+    fn fully_connected_test() {
+        let mut x = ComputationCircuit::new();
+        let input = x.mem.alloc(&[5]);
+        let output = x.mem.alloc(&[2]);
+        let weight = x.mem.alloc(&[2,5]);
+        let bias = x.mem.alloc(&[2]);
+        x.fully_connected(input, output, weight, Some(bias));
+
+        let mut mem = x.mem.new_memory();
+        mem[1..6].copy_from_slice(&[2,-2,4,3,1]);
+        mem[8..18].copy_from_slice(&[-2,3,-2,5,3,-1,5,0,3,2]);
+        x.compute(&mut mem);
+        assert_eq!(mem[6..8], [0, -1]);
         x.sort_cons();
         assert!(x.verify(&mem));
     }

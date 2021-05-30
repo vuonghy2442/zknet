@@ -26,24 +26,24 @@ impl Iterator for VariableTensorIter {
     type Item = u32;
     fn next(&mut self) -> Option<Self::Item> {
         if self.idx.len() == 0 {
-            return None
-        }
-        let val = self.val_next;
-        for i in (0..self.tensor.dim.len()).rev() {
-            if self.idx[i] < self.tensor.dim[i] - 1 {
-                self.idx[i] += 1;
-                self.val_next += self.tensor.step[i];
-                break;
-            } else {
-                if i == 0 {
-                    self.idx.clear();
+            self.idx.resize(self.tensor.dim.len(), 0);
+            self.val_next = self.tensor.start;
+        } else {
+            for i in (0..self.tensor.dim.len()).rev() {
+                if self.idx[i] < self.tensor.dim[i] - 1 {
+                    self.idx[i] += 1;
+                    self.val_next += self.tensor.step[i];
                     break;
+                } else {
+                    if i == 0 {
+                        return None;
+                    }
+                    self.idx[i] = 0;
+                    self.val_next -= self.tensor.step[i] * (self.tensor.dim[i] - 1);
                 }
-                self.idx[i] = 0;
-                self.val_next -= self.tensor.step[i] * (self.tensor.dim[i] - 1);
-            }
-        };
-        return Some(val);
+            };
+        }
+        return Some(self.val_next);
     }
 }
 
@@ -172,11 +172,9 @@ impl VariableTensor {
     }
 
     pub fn iter(&self) -> VariableTensorIter {
-        let mut idx: Vec<u32> = Vec::new();
-        idx.resize(self.dim.len(), 0);
         VariableTensorIter {
             tensor: self.squeeze(),
-            idx,
+            idx: Vec::new(),
             val_next: self.start
         }
     }
