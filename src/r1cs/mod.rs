@@ -69,7 +69,7 @@ pub struct ComputationCircuit {
     c: Vec<(u32, u32, i32)>,
     n_cons: u32,
     pub mem: MemoryManager,
-    compute: Vec<(Vec<MemAddress>, fn(mem: &MemoryManager, &[MemAddress], &mut Memory))>
+    compute: Vec<(Box<[MemAddress]>, fn(mem: &MemoryManager, &[MemAddress], &mut Memory))>
 }
 
 impl ComputationCircuit {
@@ -114,6 +114,12 @@ impl ComputationCircuit {
         return true;
     }
 
+    pub fn load_memory(&self, tensor: TensorAddress, var_dict: &mut Memory, data: &[Scalar]) {
+        for (pos, &data) in izip!(self.mem[tensor].iter(), data) {
+            var_dict[pos as usize] = data;
+        }
+    }
+
     pub fn compute(&self, var_dict: &mut Memory) {
         for (params, func) in &self.compute {
             func(&self.mem, &params, var_dict);
@@ -137,7 +143,7 @@ impl ComputationCircuit {
                 var_dict[z as usize] = var_dict[x as usize] * var_dict[y as usize];
             }
         }
-        self.compute.push((vec![MemAddress{block_id: a}, MemAddress{block_id: b}, MemAddress{block_id: res}], run));
+        self.compute.push((Box::new([MemAddress{block_id: a}, MemAddress{block_id: b}, MemAddress{block_id: res}]), run));
     }
 
     pub fn sum(&mut self, inp: TensorAddress, out: ScalarAddress, init: Option<u32>) {
@@ -163,7 +169,7 @@ impl ComputationCircuit {
         if let Some(x) = init {
             params.push(MemAddress{memory_id: x});
         }
-        self.compute.push((params, run));
+        self.compute.push((params.into_boxed_slice(), run));
     }
 
     pub fn conv2d(&mut self, input: TensorAddress, output: TensorAddress, weight: TensorAddress, bias: Option<(TensorAddress, u32)>) {
@@ -256,12 +262,12 @@ impl ComputationCircuit {
                 assert_eq!(x, 0);
             }
         }
-        let params = vec![MemAddress{block_id: input}, MemAddress{block_id: output}, MemAddress{block_id: sign}, MemAddress{block_id: abs}];
+        let params = Box::new([MemAddress{block_id: input}, MemAddress{block_id: output}, MemAddress{block_id: sign}, MemAddress{block_id: abs}]);
         self.compute.push((params, run));
     }
 
     pub fn sign(&mut self, input: TensorAddress, output: TensorAddress, max_bits: u8) {
-        let mut dim = self.mem[input].dim.clone();
+        let mut dim = self.mem[input].dim.to_vec();
         let abs = self.mem.alloc(&dim);
         dim.push(max_bits as u32);
         let bits = self.mem.alloc(&dim);
@@ -269,7 +275,7 @@ impl ComputationCircuit {
     }
 
     pub fn relu(&mut self, input: TensorAddress, output: TensorAddress, max_bits: u8) {
-        let mut dim = self.mem[input].dim.clone();
+        let mut dim = self.mem[input].dim.to_vec();
         let abs = self.mem.alloc(&dim);
         let sign = self.mem.alloc(&dim);
         dim.push(max_bits as u32);
@@ -289,13 +295,13 @@ impl ComputationCircuit {
                 var_dict[output as usize] = if x >= 0 {x} else {0};
             }
         }
-        let params = vec![MemAddress{block_id: input}, MemAddress{block_id: output}];
+        let params = Box::new([MemAddress{block_id: input}, MemAddress{block_id: output}]);
         self.compute.push((params, run));
     }
 
     // input tensor 3d
     pub fn binary_max_pool(&mut self, input: TensorAddress, output: TensorAddress) {
-        let mut dim = self.mem[input].dim.clone();
+        let mut dim = self.mem[input].dim.to_vec();
         dim.push(2);
         let temp = self.mem.alloc(&dim);
         for layer in 0..self.mem[input].dim[0] {
@@ -340,7 +346,7 @@ impl ComputationCircuit {
                 }
             }
         }
-        let params = vec![MemAddress{block_id: input}, MemAddress{block_id: output}, MemAddress{block_id: temp}];
+        let params = Box::new([MemAddress{block_id: input}, MemAddress{block_id: output}, MemAddress{block_id: temp}]);
         self.compute.push((params, run));
     }
 

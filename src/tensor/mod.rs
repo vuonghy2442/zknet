@@ -12,8 +12,8 @@ pub enum TensorIndex {
 #[derive(Clone)]
 pub struct VariableTensor {
     start: u32,
-    pub dim: Vec<u32>,
-    step: Vec<u32>
+    pub dim: Box<[u32]>,
+    step: Box<[u32]>
 }
 
 pub struct VariableTensorIter {
@@ -59,7 +59,7 @@ impl VariableTensor {
         VariableTensor {
             start,
             dim: shape.iter().cloned().collect(),
-            step
+            step: step.into_boxed_slice()
         }
     }
 
@@ -82,20 +82,19 @@ impl VariableTensor {
     }
 
     pub fn at_(&self, idx: &[u32]) -> VariableTensor {
+        assert!(idx.len() < self.dim.len());
+
         let mut s = self.start;
-        let dim: Vec<u32> = self.dim[idx.len()..].to_vec();
-        let step: Vec<u32> = self.step[idx.len()..].to_vec();
         for i in 0..idx.len() {
             let pos = idx[i];
             assert!(pos < self.dim[i]);
             s += self.step[i] * pos;
         }
 
-        assert!(dim.len() > 0);
         VariableTensor {
             start: s,
-            dim,
-            step
+            dim: self.dim[idx.len()..].to_vec().into_boxed_slice(),
+            step: self.step[idx.len()..].to_vec().into_boxed_slice()
         }
     }
 
@@ -143,8 +142,8 @@ impl VariableTensor {
         assert!(dim.len() > 0);
         VariableTensor {
             start: s,
-            dim,
-            step
+            dim: dim.into_boxed_slice(),
+            step: step.into_boxed_slice()
         }
     }
 
@@ -162,13 +161,13 @@ impl VariableTensor {
         };
         VariableTensor {
             start,
-            dim,
-            step
+            dim: dim.into_boxed_slice(),
+            step: step.into_boxed_slice()
         }
     }
 
     pub fn first(&self) -> u32 {
-        return self.start;
+        self.start
     }
 
     pub fn iter(&self) -> VariableTensorIter {
