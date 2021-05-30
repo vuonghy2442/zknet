@@ -4,15 +4,15 @@ use itertools::izip;
 use crate::tensor::TensorIndex::Id;
 use crate::tensor::TensorIndex::Range;
 use crate::tensor::TensorIndex::RangeFull;
-use std::ops::{Index, IndexMut};
+use std::ops::{Index};
 
 type Scalar = i32;
-type CellAddress = u32;
-type BlockAddress = u32;
+type ScalarAddress = u32;
+type TensorAddress = u32;
 
 union MemAddress {
-    block_id: BlockAddress,
-    memory_id: CellAddress
+    block_id: TensorAddress,
+    memory_id: ScalarAddress
 }
 
 struct MemoryManager {
@@ -30,21 +30,21 @@ impl MemoryManager {
         }
     }
 
-    fn alloc(&mut self, shape: &[u32]) -> BlockAddress {
+    fn alloc(&mut self, shape: &[u32]) -> TensorAddress {
         let var = VariableTensor::new(self.n_var, shape);
         self.n_var += var.size();
         self.mem_dict.push(var);
-        (self.mem_dict.len() - 1) as BlockAddress
+        (self.mem_dict.len() - 1) as TensorAddress
     }
 
-    fn alloc_single(&mut self) -> CellAddress {
+    fn alloc_single(&mut self) -> ScalarAddress {
         self.n_var += 1;
         return self.n_var - 1;
     }
 
-    fn save(&mut self, tensor: VariableTensor) -> BlockAddress {
+    fn save(&mut self, tensor: VariableTensor) -> TensorAddress {
         self.mem_dict.push(tensor);
-        (self.mem_dict.len() - 1) as BlockAddress
+        (self.mem_dict.len() - 1) as TensorAddress
     }
 
     fn new_memory(&self) -> Vec<Scalar> {
@@ -55,9 +55,9 @@ impl MemoryManager {
     }
 }
 
-impl Index<BlockAddress> for MemoryManager {
+impl Index<TensorAddress> for MemoryManager {
     type Output = VariableTensor;
-    fn index(&self, idx: BlockAddress) -> &Self::Output {
+    fn index(&self, idx: TensorAddress) -> &Self::Output {
         &self.mem_dict[idx as usize]
     }
 }
@@ -86,13 +86,43 @@ impl ComputationCircuit {
         }
     }
 
+    fn sort_cons(&mut self) {
+        self.a.sort();
+        self.b.sort();
+        self.c.sort();
+    }
+
+    fn verify(&self, var_dict: &[Scalar]) -> bool {
+        let (mut ai, mut bi, mut ci) = (0, 0, 0);
+        for i in 0..self.n_cons {
+            let (mut sa, mut sb, mut sc) = (0, 0, 0);
+            while ai < self.a.len() && self.a[ai].0 == i {
+                sa += var_dict[self.a[ai].1 as usize] * self.a[ai].2;
+                ai += 1;
+            }
+            while bi < self.b.len() && self.b[bi].0 == i {
+                sb += var_dict[self.b[bi].1 as usize] * self.b[bi].2;
+                bi += 1;
+            }
+            while ci < self.c.len() && self.c[ci].0 == i {
+                sc += var_dict[self.c[ci].1 as usize] * self.c[ci].2;
+                ci += 1;
+            }
+
+            if sa * sb != sc {
+                return false;
+            }
+        }
+        return true;
+    }
+
     fn compute(&self, var_dict: &mut Memory) {
         for (params, func) in &self.compute {
             func(&self.mem, &params, var_dict);
         }
     }
 
-    fn mul(&mut self, a: BlockAddress, b: BlockAddress, res: BlockAddress) {
+    fn mul(&mut self, a: TensorAddress, b: TensorAddress, res: TensorAddress) {
         for (x, y, z) in izip!(self.mem[a].iter(), self.mem[b].iter(), self.mem[res].iter()) {
             self.a.push((self.n_cons, x, 1));
             self.b.push((self.n_cons, y, 1));
@@ -108,7 +138,7 @@ impl ComputationCircuit {
         self.compute.push((vec![MemAddress{block_id: a}, MemAddress{block_id: b}, MemAddress{block_id: res}], run));
     }
 
-    fn sum(&mut self, inp: BlockAddress, out: CellAddress, init: Option<u32>) {
+    fn sum(&mut self, inp: TensorAddress, out: ScalarAddress, init: Option<u32>) {
         if let Some(x) = init {
             self.a.push((self.n_cons, x, 1));
         }
@@ -134,7 +164,7 @@ impl ComputationCircuit {
         self.compute.push((params, run));
     }
 
-    fn conv2d(&mut self, input: BlockAddress, output: BlockAddress, weight: BlockAddress, bias: Option<(BlockAddress, u32)>) {
+    fn conv2d(&mut self, input: TensorAddress, output: TensorAddress, weight: TensorAddress, bias: Option<(TensorAddress, u32)>) {
         let fout = self.mem[weight].dim[0];
         let fin = self.mem[weight].dim[1];
         let kx = self.mem[weight].dim[2];
@@ -156,6 +186,156 @@ impl ComputationCircuit {
             }
         }
     }
+
+    // input should have shape with sign, abs, and output should have one more dimension with length bit size
+    fn bit_decomposition(&mut self, input: TensorAddress, output: TensorAddress, sign: TensorAddress, abs: TensorAddress) {
+        let mut iter = self.mem[input].iter();
+        loop {
+            let x = iter.next();
+            if let None = x {
+                break
+            }
+            let x = x.unwrap();
+            let idx = &iter.idx;
+
+            let bits = self.mem[output].at_(idx);
+            let abs = self.mem[abs].at_idx(idx);
+            let sign = self.mem[sign].at_idx(idx);
+            // abs * sign == input
+            self.a.push((self.n_cons, abs, 1));
+            self.b.push((self.n_cons, sign, 1));
+            self.c.push((self.n_cons, x, 1));
+            self.n_cons += 1;
+
+            // sign only = +-1 <=> sign^2 == 1
+            self.a.push((self.n_cons, sign, 1));
+            self.b.push((self.n_cons, sign, 1));
+            self.c.push((self.n_cons, MemoryManager::ONE_VAR, 1));
+
+            let sum_cons = self.n_cons;
+            self.n_cons += 1;
+
+            let mut pow = 1;
+            for bit in bits.iter() {
+                self.a.push((sum_cons, bit, pow));
+                pow *= 2;
+
+                // bit only 0 or 1 <=> bit^2 = bit
+                self.a.push((self.n_cons, bit, 1));
+                self.b.push((self.n_cons, bit, 1));
+                self.c.push((self.n_cons, bit, 1));
+                self.n_cons += 1;
+            }
+        }
+
+        fn run(mem: &MemoryManager, param: &[MemAddress], var_dict: &mut Memory) {
+            let mut iter = mem[unsafe{param[0].block_id}].iter();
+            loop {
+                let x = iter.next();
+                if let None = x {
+                    break
+                }
+                let x = var_dict[x.unwrap() as usize];
+                let idx = &iter.idx;
+                let bits = mem[unsafe {param[1].block_id}].at_(idx);
+                let abs = mem[unsafe {param[2].block_id}].at_idx(idx);
+                let sign = mem[unsafe {param[3].block_id}].at_idx(idx);
+
+                var_dict[abs as usize] = x.abs();
+                var_dict[sign as usize] = if x >= 0 {1} else {-1};
+
+                let mut x = x;
+                for bit in bits.iter() {
+                    var_dict[bit as usize] = x % 2;
+                    x /= 2;
+                }
+                assert_eq!(x, 0);
+            }
+        }
+        let params = vec![MemAddress{block_id: input}, MemAddress{memory_id: output}, MemAddress{memory_id: sign}, MemAddress{memory_id: abs}];
+        self.compute.push((params, run));
+    }
+
+    fn sign(&mut self, input: TensorAddress, output: TensorAddress, max_bits: u8) {
+        let mut dim = self.mem[input].dim.clone();
+        let abs = self.mem.alloc(&dim);
+        dim.push(max_bits as u32);
+        let bits = self.mem.alloc(&dim);
+        self.bit_decomposition(input, bits, output, abs);
+    }
+
+    fn relu(&mut self, input: TensorAddress, output: TensorAddress, max_bits: u8) {
+        let mut dim = self.mem[input].dim.clone();
+        let abs = self.mem.alloc(&dim);
+        let sign = self.mem.alloc(&dim);
+        dim.push(max_bits as u32);
+        let bits = self.mem.alloc(&dim);
+        self.bit_decomposition(input, bits, sign, abs);
+
+        for (abs, input, output) in izip!(self.mem[abs].iter(), self.mem[input].iter(), self.mem[output].iter()) {
+            self.a.push((self.n_cons, input, 1));
+            self.a.push((self.n_cons, abs, 1));
+            self.a.push((self.n_cons, output, 2));
+            self.n_cons += 1;
+        }
+
+        fn run(mem: &MemoryManager, param: &[MemAddress], var_dict: &mut Memory) {
+            for (input, output) in izip!(mem[unsafe {param[0].block_id}].iter(), mem[unsafe {param[1].block_id}].iter()) {
+                let x = var_dict[input as usize];
+                var_dict[output as usize] = if x >= 0 {x} else {0};
+            }
+        }
+        let params = vec![MemAddress{block_id: input}, MemAddress{memory_id: output}];
+        self.compute.push((params, run));
+    }
+
+    // input tensor 3d
+    fn binary_max_pool(&mut self, input: TensorAddress, output: TensorAddress) {
+        let mut dim = self.mem[input].dim.clone();
+        dim.push(2);
+        let temp = self.mem.alloc(&dim);
+        for layer in 0..self.mem[input].dim[0] {
+            let input = self.mem[output].at_(&[layer]);
+            let output = self.mem[output].at_(&[layer]);
+            for i in 0..input.dim[0]/2 {
+                for j in 0..input.dim[1]/2 {
+                    let t = [self.mem[temp].at_idx(&[layer, i, j, 0]), self.mem[temp].at_idx(&[layer, i, j, 1])];
+                    for k in 0..2 {
+                        self.a.push((self.n_cons, input.at_idx(&[2*i + k, 2*j]), 1));
+                        self.a.push((self.n_cons, MemoryManager::ONE_VAR, -1));
+                        self.b.push((self.n_cons, input.at_idx(&[2*i + k, 2*j + 1]), 1));
+                        self.b.push((self.n_cons, MemoryManager::ONE_VAR, -1));
+                        self.c.push((self.n_cons, t[k as usize], 2));
+                        self.n_cons += 1;
+                    }
+                    self.a.push((self.n_cons, t[0], 1));
+                    self.b.push((self.n_cons, t[0], 1));
+                    self.c.push((self.n_cons,  output.at_idx(&[i,j]), -2));
+                    self.c.push((self.n_cons,  MemoryManager::ONE_VAR, 2));
+                }
+            }
+        }
+
+        fn run(mem: &MemoryManager, param: &[MemAddress], var_dict: &mut Memory) {
+            let (input, output, temp) = unsafe{(param[0].block_id, param[1].block_id, param[2].block_id)};
+            for layer in 0..mem[input].dim[0] {
+                let input = mem[output].at_(&[layer]);
+                let output = mem[output].at_(&[layer]);
+                for i in 0..input.dim[0]/2 {
+                    for j in 0..input.dim[1]/2 {
+                        let t = [mem[temp].at_idx(&[layer, i, j, 0]), mem[temp].at_idx(&[layer, i, j, 1])];
+                        for k in 0..2 {
+                            var_dict[t[k] as usize] = (var_dict[input.at_idx(&[2*i + k as u32, 2*j]) as usize] - 1)
+                                    *(var_dict[input.at_idx(&[2*i + k as u32, 2*j + 1]) as usize] - 1) /2;
+                        }
+                        var_dict[output.at_idx(&[i,j]) as usize] = -var_dict[t[0] as usize] * var_dict[t[1] as usize]/2 + 1;
+                    }
+                }
+            }
+        }
+        let params = vec![MemAddress{block_id: input}, MemAddress{memory_id: output}, MemAddress{memory_id: temp}];
+        self.compute.push((params, run));
+    }
 }
 
 #[cfg(test)]
@@ -173,6 +353,8 @@ mod tests {
         let mut mem: Vec<i32> = vec![1,5,2,3,1,6,3,0,0,0];
         x.compute(&mut mem);
         assert_eq!(mem[7..10], [5, 12, 9]);
+        x.sort_cons();
+        assert!(x.verify(&mem));
     }
 
     #[test]
@@ -187,6 +369,8 @@ mod tests {
         let mut mem: Vec<i32> = vec![1,5,2,3,-2,0];
         x.compute(&mut mem);
         assert_eq!(mem[5], 8);
+        x.sort_cons();
+        assert!(x.verify(&mem));
     }
 
     #[test]
@@ -204,5 +388,7 @@ mod tests {
 
         x.compute(&mut mem);
         assert_eq!(mem[87..87+18], [32,3,-36,-27,-9,59,44,-21,-16,-23,25,-4,-24,-8,21,-15,-33,-1]);
+        x.sort_cons();
+        assert!(x.verify(&mem));
     }
 }

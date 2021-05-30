@@ -18,7 +18,7 @@ pub struct VariableTensor {
 
 pub struct VariableTensorIter {
     tensor: VariableTensor,
-    idx: Vec<u32>,
+    pub idx: Vec<u32>,
     val_next : u32
 }
 
@@ -79,8 +79,26 @@ impl VariableTensor {
             res += idx[i] * self.step[i];
         }
         return res;
-
     }
+
+    pub fn at_(&self, idx: &[u32]) -> VariableTensor {
+        let mut s = self.start;
+        let dim: Vec<u32> = self.dim[idx.len()..].to_vec();
+        let step: Vec<u32> = self.step[idx.len()..].to_vec();
+        for i in 0..idx.len() {
+            let pos = idx[i];
+            assert!(pos < self.dim[i]);
+            s += self.step[i] * pos;
+        }
+
+        assert!(dim.len() > 0);
+        VariableTensor {
+            start: s,
+            dim,
+            step
+        }
+    }
+
     pub fn at(&self, idx: &[TensorIndex]) -> VariableTensor {
         let mut s = self.start;
         let mut dim: Vec<u32> = Vec::new();
