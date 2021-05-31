@@ -1,6 +1,7 @@
 mod tensor;
 mod r1cs;
 mod nn;
+mod zk;
 
 fn main() {
     let network = nn::NeuralNetwork::new();
@@ -11,4 +12,6 @@ fn main() {
     for r in result{
         print!("{} ", r);
     }
+
+    zk::prove(network, &mut memory);
 }

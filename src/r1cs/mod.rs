@@ -163,6 +163,27 @@ impl ConstraintSystem {
         }
     }
 
+    pub fn get_spartan_instance(&self) -> (libspartan::Instance, usize, usize, usize) {
+        fn parse_matrix(mat: &[(u32, u32, i32)]) -> Vec<(usize, usize, [u8; 32])> {
+            let mut ans: Vec<(usize, usize, [u8; 32])> = Vec::with_capacity(mat.len());
+            for row in mat {
+                let u = row.0 as usize;
+                let v = row.1 as usize;
+                let w = crate::zk::to_bytes(row.2);
+                ans.push((u, v, w))
+            }
+            return ans;
+        }
+        let num_cons = self.n_cons as usize;
+        let num_vars = self.mem.one_var as usize;
+        let num_inputs = (self.mem.n_var - self.mem.one_var - 1) as usize;
+        (libspartan::Instance::new(num_cons,
+            num_vars,
+            num_inputs,
+            &parse_matrix(&self.a), &parse_matrix(&self.b), &parse_matrix(&self.c)
+        ).unwrap(), num_cons, num_vars, num_inputs)
+    }
+
     pub fn sort_cons(&mut self) {
         self.a.sort_unstable();
         self.b.sort_unstable();

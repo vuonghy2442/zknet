@@ -10,6 +10,10 @@ edition = "2018"
 itertools = "0.10.0"
 serde = "1.0.126"
 serde-pickle = "0.6.2"
+spartan = "0.3.0"
+merlin = "3.0.0"
+curve25519-dalek = "3.1.0"
+serde_json = "1.0.64"
 
 [profile.release]
 lto = true

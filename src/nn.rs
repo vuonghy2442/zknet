@@ -124,6 +124,10 @@ impl NeuralNetwork {
         memory
     }
 
+    pub fn get_spartan_instance(&self) -> (libspartan::Instance, usize, usize, usize) {
+        return self.cons.get_spartan_instance();
+    }
+
     pub fn run(&self, var_dict: &mut [Scalar], input: &[Scalar], verify: bool) -> Vec<Scalar> {
         self.cons.load_memory(self.input, var_dict, input);
         self.cons.compute(var_dict);
