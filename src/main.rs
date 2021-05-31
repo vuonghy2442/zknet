@@ -1,10 +1,10 @@
 mod tensor;
 mod r1cs;
-use r1cs::ComputationCircuit;
+mod nn;
+use r1cs::ConstraintSystem;
 use r1cs::TensorAddress;
 use std::cmp::max;
 use serde_pickle::from_reader;
-use serde_pickle::Value;
 use std::fs::File;
 use std::collections::HashMap;
 
@@ -16,7 +16,7 @@ macro_rules! hashmap {
     }}
 }
 
-fn convolution_layer(c: &mut ComputationCircuit, input: TensorAddress, kernel: [u32;2], feature: u32, bias_scale: u32) -> (TensorAddress, TensorAddress, TensorAddress) {
+fn convolution_layer(c: &mut ConstraintSystem, input: TensorAddress, kernel: [u32;2], feature: u32, bias_scale: u32) -> (TensorAddress, TensorAddress, TensorAddress) {
     let (row, col) = (c.mem[input].dim[1], c.mem[input].dim[2]);
     let (row_out, col_out) = (row - kernel[0] + 1, col - kernel[1] + 1);
     let conv_out = c.mem.alloc(&[feature, row_out, col_out ]);
@@ -28,13 +28,13 @@ fn convolution_layer(c: &mut ComputationCircuit, input: TensorAddress, kernel: [
     return (conv_out, conv_weight, conv_bias);
 }
 
-fn sign_activation(c: &mut ComputationCircuit, input: TensorAddress, max_bits: u8) -> TensorAddress {
+fn sign_activation(c: &mut ConstraintSystem, input: TensorAddress, max_bits: u8) -> TensorAddress {
     let output = c.mem.alloc(&c.mem[input].dim.clone());
     c.sign(input, output, max_bits);
     return output;
 }
 
-fn max_pool(c: &mut ComputationCircuit, input: TensorAddress) -> TensorAddress {
+fn max_pool(c: &mut ConstraintSystem, input: TensorAddress) -> TensorAddress {
     let dim = c.mem[input].dim.clone();
     let output = c.mem.alloc(&[dim[0], dim[1]/2, dim[2]/2]);
 
@@ -42,17 +42,17 @@ fn max_pool(c: &mut ComputationCircuit, input: TensorAddress) -> TensorAddress {
     return output;
 }
 
-fn resize(c: &mut ComputationCircuit, input: TensorAddress, shape: &[u32]) -> TensorAddress {
+fn resize(c: &mut ConstraintSystem, input: TensorAddress, shape: &[u32]) -> TensorAddress {
     c.mem.save(c.mem[input].resize(shape))
 }
 
-fn relu_activation(c: &mut ComputationCircuit, input: TensorAddress, max_bits: u8) -> TensorAddress {
+fn relu_activation(c: &mut ConstraintSystem, input: TensorAddress, max_bits: u8) -> TensorAddress {
     let output = c.mem.alloc(&c.mem[input].dim.clone());
     c.relu(input, output, max_bits);
     return output;
 }
 
-fn linear(c: &mut ComputationCircuit, input: TensorAddress, n_feature: u32) -> (TensorAddress, TensorAddress, TensorAddress) {
+fn linear(c: &mut ConstraintSystem, input: TensorAddress, n_feature: u32) -> (TensorAddress, TensorAddress, TensorAddress) {
     let output = c.mem.alloc(&[n_feature]);
     let weight = c.mem.alloc(&[n_feature, c.mem[input].size()]);
     let bias = c.mem.alloc(&[n_feature]);
@@ -73,14 +73,14 @@ fn load_weight(file: &str, nn: &NeuralNetwork) -> Vec<r1cs::Scalar> {
 }
 
 struct NeuralNetwork {
-    circuit: ComputationCircuit,
+    circuit: ConstraintSystem,
     weight_map: HashMap<String, TensorAddress>,
     input: TensorAddress,
     output: TensorAddress
 }
 
 fn neural_network() -> NeuralNetwork {
-    let mut c = ComputationCircuit::new();
+    let mut c = ConstraintSystem::new();
     let input = c.mem.alloc(&[1,28,28]);
     let input_resized = resize(&mut c, input, &[1, 26, 26]);
     let (conv1_out, conv1_weight, conv1_bias) = convolution_layer(&mut c, input_resized, [5,5], 20, 0);

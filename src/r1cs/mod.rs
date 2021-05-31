@@ -62,7 +62,7 @@ impl Index<TensorAddress> for MemoryManager {
 }
 type Memory = [Scalar];
 
-pub struct ComputationCircuit {
+pub struct ConstraintSystem {
     a: Vec<(u32, u32, i32)>,
     b: Vec<(u32, u32, i32)>,
     c: Vec<(u32, u32, i32)>,
@@ -71,9 +71,9 @@ pub struct ComputationCircuit {
     compute: Vec<(Box<[MemAddress]>, fn(mem: &MemoryManager, &[MemAddress], &mut Memory))>
 }
 
-impl ComputationCircuit {
-    pub fn new() -> ComputationCircuit {
-        ComputationCircuit {
+impl ConstraintSystem {
+    pub fn new() -> ConstraintSystem {
+        ConstraintSystem {
             a: Vec::new(),
             b: Vec::new(),
             c: Vec::new(),
@@ -179,17 +179,14 @@ impl ComputationCircuit {
         let kx = self.mem[weight].dim[2];
         let ky = self.mem[weight].dim[3];
         let (out_row, out_col) = (self.mem[input].dim[1] - kx + 1, self.mem[input].dim[2] - ky + 1);
-        let mut cur_weight: Vec<TensorAddress> = Vec::new();
-        cur_weight.reserve(fout as usize);
+        let mut cur_weight: Vec<TensorAddress> = Vec::with_capacity(fout as usize);
         for layer in 0..fout {
             cur_weight.push(self.mem.save(self.mem[weight].at(&[Id(layer)])));
         }
 
-        let mut cur_input: Vec<Vec<TensorAddress>> = Vec::new();
-        cur_input.reserve(out_row as usize);
+        let mut cur_input: Vec<Vec<TensorAddress>> = Vec::with_capacity(out_row as usize);
         for i in 0..out_row {
-            let mut tmp: Vec<TensorAddress> = Vec::new();
-            tmp.reserve(out_col as usize);
+            let mut tmp: Vec<TensorAddress> = Vec::with_capacity(out_col as usize);
             for j in 0..out_col {
                 tmp.push(self.mem.save(self.mem[input].at(&[RangeFull(), Range(i..i+kx), Range(j..j+ky)])));
             }
@@ -387,7 +384,7 @@ mod tests {
 
     #[test]
     fn mul_circuit_test() {
-        let mut x = ComputationCircuit::new();
+        let mut x = ConstraintSystem::new();
         let a = x.mem.alloc(&[3]);
         let b = x.mem.alloc(&[3]);
         let c = x.mem.alloc(&[3]);
@@ -402,7 +399,7 @@ mod tests {
 
     #[test]
     fn sum_circuit_test() {
-        let mut x = ComputationCircuit::new();
+        let mut x = ConstraintSystem::new();
         let a = x.mem.alloc(&[3]);
         let bias = x.mem.alloc_single();
         let res = x.mem.alloc_single();
@@ -418,7 +415,7 @@ mod tests {
 
     #[test]
     fn conv2d_test() {
-        let mut x = ComputationCircuit::new();
+        let mut x = ConstraintSystem::new();
         let input = x.mem.alloc(&[2,5,5]);
         let weight = x.mem.alloc(&[2,2,3,3]);
         let output = x.mem.alloc(&[2,3,3]);
@@ -437,7 +434,7 @@ mod tests {
 
     #[test]
     fn sign_test() {
-        let mut x = ComputationCircuit::new();
+        let mut x = ConstraintSystem::new();
         let input = x.mem.alloc(&[2,2]);
         let output = x.mem.alloc(&[2,2]);
         x.sign(input, output, 3);
@@ -451,7 +448,7 @@ mod tests {
 
     #[test]
     fn relu_test() {
-        let mut x = ComputationCircuit::new();
+        let mut x = ConstraintSystem::new();
         let input = x.mem.alloc(&[2,2]);
         let output = x.mem.alloc(&[2,2]);
         x.relu(input, output, 3);
@@ -465,7 +462,7 @@ mod tests {
 
     #[test]
     fn max_pool_test() {
-        let mut x = ComputationCircuit::new();
+        let mut x = ConstraintSystem::new();
         let input = x.mem.alloc(&[2,2,4]);
         let output = x.mem.alloc(&[2,1,2]);
         x.binary_max_pool(input, output);
@@ -479,7 +476,7 @@ mod tests {
 
     #[test]
     fn fully_connected_test() {
-        let mut x = ComputationCircuit::new();
+        let mut x = ConstraintSystem::new();
         let input = x.mem.alloc(&[5]);
         let output = x.mem.alloc(&[2]);
         let weight = x.mem.alloc(&[2,5]);

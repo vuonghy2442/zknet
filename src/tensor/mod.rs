@@ -100,10 +100,8 @@ impl VariableTensor {
 
     pub fn at(&self, idx: &[TensorIndex]) -> VariableTensor {
         let mut s = self.start;
-        let mut dim: Vec<u32> = Vec::new();
-        let mut step: Vec<u32> = Vec::new();
-        dim.reserve(self.dim.len());
-        step.reserve(self.dim.len());
+        let mut dim: Vec<u32> = Vec::with_capacity(self.dim.len());
+        let mut step: Vec<u32> = Vec::with_capacity(self.dim.len());
         for i in 0..idx.len() {
             match idx[i] {
                 TensorIndex::Id(pos) => {
@@ -158,10 +156,8 @@ impl VariableTensor {
 
     pub fn squeeze(&self) -> VariableTensor {
         let start = self.start;
-        let mut dim: Vec<u32> = Vec::new();
-        let mut step: Vec<u32> = Vec::new();
-        dim.reserve(self.dim.len());
-        step.reserve(self.dim.len());
+        let mut dim: Vec<u32> = Vec::with_capacity(self.dim.len());
+        let mut step: Vec<u32> = Vec::with_capacity(self.dim.len());
         for i in 0..self.dim.len() {
             if self.dim[i] > 1 {
                 dim.push(self.dim[i]);
