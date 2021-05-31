@@ -12,6 +12,7 @@ fn main() {
     for r in result{
         print!("{} ", r);
     }
+    println!("");
 
     zk::prove(network, &mut memory);
 }

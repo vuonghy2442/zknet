@@ -47,12 +47,11 @@ pub fn prove(network: nn::NeuralNetwork, memory: &[crate::r1cs::Scalar]) {
         &mut prover_transcript,
     );
 
-    let ser = serde_json::to_string(&proof).unwrap();
-    println!("[+] Proof size: {}", ser.len());
-
+    let bin = bincode::serialize(&proof).unwrap();
+    println!("[+] Proof size: {}", bin.len());
     println!("[+] Writing proof to proof.dat");
     let mut w = File::create("proof.dat").unwrap();
-    writeln!(&mut w, "{}", ser).unwrap();
+    w.write_all(&bin).unwrap();
 
     let mut verifier_transcript = Transcript::new(b"nizk_example");
     assert!(proof
