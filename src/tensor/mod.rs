@@ -147,7 +147,16 @@ impl VariableTensor {
         }
     }
 
-    fn squeeze(&self) -> VariableTensor {
+    pub fn resize(&self, dim: &[u32]) -> VariableTensor {
+        assert_eq!(self.dim.len(), dim.len());
+        VariableTensor {
+            start: self.start,
+            dim: dim.to_vec().into_boxed_slice(),
+            step: self.step.clone()
+        }
+    }
+
+    pub fn squeeze(&self) -> VariableTensor {
         let start = self.start;
         let mut dim: Vec<u32> = Vec::new();
         let mut step: Vec<u32> = Vec::new();
@@ -196,7 +205,7 @@ mod tests {
         }
 
         let x = x.at(&[TensorIndex::Id(1), TensorIndex::Range(1..2), TensorIndex::RangeFull()]);
-        assert_eq!(x.dim, [1,4]);
+        assert_eq!(x.dim.to_vec(), [1,4]);
         for (x, y) in Iterator::zip(x.iter(), 31..35) {
             assert_eq!(x, y);
         }

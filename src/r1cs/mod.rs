@@ -6,7 +6,7 @@ use crate::tensor::TensorIndex::Range;
 use crate::tensor::TensorIndex::RangeFull;
 use std::ops::{Index};
 
-type Scalar = i32;
+pub type Scalar = i32;
 type ScalarAddress = u32;
 pub type TensorAddress = u32;
 
@@ -33,8 +33,7 @@ impl MemoryManager {
     pub fn alloc(&mut self, shape: &[u32]) -> TensorAddress {
         let var = VariableTensor::new(self.n_var, shape);
         self.n_var += var.size();
-        self.mem_dict.push(var);
-        (self.mem_dict.len() - 1) as TensorAddress
+        self.save(var)
     }
 
     fn alloc_single(&mut self) -> ScalarAddress {
@@ -42,12 +41,12 @@ impl MemoryManager {
         return self.n_var - 1;
     }
 
-    fn save(&mut self, tensor: VariableTensor) -> TensorAddress {
+    pub fn save(&mut self, tensor: VariableTensor) -> TensorAddress {
         self.mem_dict.push(tensor);
         (self.mem_dict.len() - 1) as TensorAddress
     }
 
-    fn new_memory(&self) -> Vec<Scalar> {
+    pub fn new_memory(&self) -> Vec<Scalar> {
         let mut var_dict: Vec<Scalar> = Vec::new();
         var_dict.resize(self.n_var as usize, 0);
         var_dict[Self::ONE_VAR as usize] = 1;
@@ -115,6 +114,7 @@ impl ComputationCircuit {
     }
 
     pub fn load_memory(&self, tensor: TensorAddress, var_dict: &mut Memory, data: &[Scalar]) {
+        assert_eq!(self.mem[tensor].size(), data.len() as u32);
         for (pos, &data) in izip!(self.mem[tensor].iter(), data) {
             var_dict[pos as usize] = data;
         }
@@ -143,6 +143,7 @@ impl ComputationCircuit {
                 var_dict[z as usize] = var_dict[x as usize] * var_dict[y as usize];
             }
         }
+
         self.compute.push((Box::new([MemAddress{block_id: a}, MemAddress{block_id: b}, MemAddress{block_id: res}]), run));
     }
 
@@ -177,13 +178,29 @@ impl ComputationCircuit {
         let fin = self.mem[weight].dim[1];
         let kx = self.mem[weight].dim[2];
         let ky = self.mem[weight].dim[3];
+        let (out_row, out_col) = (self.mem[input].dim[1] - kx + 1, self.mem[input].dim[2] - ky + 1);
+        let mut cur_weight: Vec<TensorAddress> = Vec::new();
+        cur_weight.reserve(fout as usize);
         for layer in 0..fout {
-            let cur_weight = self.mem.save(self.mem[weight].at(&[Id(layer)]));
-            for i in 0..self.mem[input].dim[1] - kx + 1 {
-                for j in 0..self.mem[input].dim[2] - ky + 1 {
+            cur_weight.push(self.mem.save(self.mem[weight].at(&[Id(layer)])));
+        }
+
+        let mut cur_input: Vec<Vec<TensorAddress>> = Vec::new();
+        cur_input.reserve(out_row as usize);
+        for i in 0..out_row {
+            let mut tmp: Vec<TensorAddress> = Vec::new();
+            tmp.reserve(out_col as usize);
+            for j in 0..out_col {
+                tmp.push(self.mem.save(self.mem[input].at(&[RangeFull(), Range(i..i+kx), Range(j..j+ky)])));
+            }
+            cur_input.push(tmp);
+        }
+
+        for layer in 0..fout {
+            for i in 0..out_row{
+                for j in 0..out_col{
                     let tmp = self.mem.alloc(&[fin, kx, ky]);
-                    let cur_input = self.mem.save(self.mem[input].at(&[RangeFull(), Range(i..i+kx), Range(j..j+ky)]));
-                    self.mul(cur_input, cur_weight, tmp);
+                    self.mul(cur_input[i as usize][j as usize], cur_weight[layer as usize], tmp);
                     let cur_bias = if let Some((b, scale)) = bias {
                         Some(self.mem[b].at_idx(&[layer, i/scale, j/scale]))
                     } else {
@@ -319,7 +336,7 @@ impl ComputationCircuit {
                         self.n_cons += 1;
                     }
                     self.a.push((self.n_cons, t[0], 1));
-                    self.b.push((self.n_cons, t[0], 1));
+                    self.b.push((self.n_cons, t[1], 1));
                     self.c.push((self.n_cons,  output.at_idx(&[i,j]), -2));
                     self.c.push((self.n_cons,  MemoryManager::ONE_VAR, 2));
                     self.n_cons += 1;
