@@ -11,7 +11,7 @@ pub enum TensorIndex {
 
 #[derive(Clone)]
 pub struct VariableTensor {
-    start: u32,
+    pub start: u32,
     pub dim: Box<[u32]>,
     step: Box<[u32]>
 }
@@ -171,8 +171,12 @@ impl VariableTensor {
         }
     }
 
-    pub fn first(&self) -> u32 {
+    pub fn begin(&self) -> u32 {
         self.start
+    }
+
+    pub fn end(&self) -> u32 {
+        self.start + self.size()
     }
 
     pub fn iter(&self) -> VariableTensorIter {

@@ -18,15 +18,16 @@ union MemAddress {
 pub struct MemoryManager {
     mem_dict: Vec<VariableTensor>,
     n_var: u32,
+    one_var: u32
 }
 
 impl MemoryManager {
-    const ONE_VAR: u32 = 0;
 
     fn new() -> MemoryManager {
         MemoryManager {
             mem_dict: Vec::new(),
-            n_var: 1
+            n_var: 1,
+            one_var: 0
         }
     }
 
@@ -49,7 +50,7 @@ impl MemoryManager {
     pub fn new_memory(&self) -> Vec<Scalar> {
         let mut var_dict: Vec<Scalar> = Vec::new();
         var_dict.resize(self.n_var as usize, 0);
-        var_dict[Self::ONE_VAR as usize] = 1;
+        var_dict[self.one_var as usize] = 1;
         var_dict
     }
 }
@@ -68,10 +69,27 @@ pub struct ConstraintSystem {
     c: Vec<(u32, u32, i32)>,
     n_cons: u32,
     pub mem: MemoryManager,
-    compute: Vec<(Box<[MemAddress]>, fn(mem: &MemoryManager, &[MemAddress], &mut Memory))>
+    compute: Vec<(Box<[MemAddress]>, Functions)>
+}
+
+#[derive(Copy, Clone)]
+enum Functions {
+    Sum = 0,
+    Mul = 1,
+    Decompose = 2,
+    Relu = 3,
+    MaxPool = 4
 }
 
 impl ConstraintSystem {
+    const FUNCTIONS: [fn(mem: &MemoryManager, &[MemAddress], &mut Memory); 5] = [
+        Self::run_sum,
+        Self::run_mul,
+        Self::run_decompose,
+        Self::run_relu,
+        Self::run_max_pool
+    ];
+
     pub fn new() -> ConstraintSystem {
         ConstraintSystem {
             a: Vec::new(),
@@ -80,6 +98,68 @@ impl ConstraintSystem {
             n_cons: 0,
             mem: MemoryManager::new(),
             compute: Vec::new()
+        }
+    }
+
+    // Bring input tensors to the end (please only put TensorAddress that is returned from alloc)
+    pub fn reorder_for_spartan(&mut self, input: &[TensorAddress]) {
+        let mut ranges: Vec<(u32, u32)> = Vec::new();
+        ranges.push((0,1)); //one var
+
+        let mut total_input: u32 = 1;
+        for &inp in input {
+            let (l, r) = (self.mem[inp].begin(), self.mem[inp].end());
+            total_input += r - l;
+            ranges.push((l,r));
+        }
+        ranges.sort_unstable();
+        let total_witness = self.mem.n_var - total_input;
+
+        let mut offset: Vec<u32> = Vec::new();
+        offset.push(0);
+        for r in ranges.iter() {
+            offset.push(offset.last().unwrap() + (r.1 - r.0));
+        }
+
+        let new_index = |pos: u32| {
+            let mut l: usize = 0;
+            let mut r: usize = ranges.len() - 1;
+            let mut res: usize = 0;
+            while l <= r {
+                let mid = (l + r)/2;
+                if ranges[mid].0 <= pos {
+                    l = mid + 1;
+                    res = mid;
+                } else {
+                    r = mid - 1;
+                }
+            }
+            if pos < ranges[res].1 {
+                // inside a moved block
+                pos - ranges[res].0 + offset[res] + total_witness
+            } else {
+                pos  - offset[res+1]
+            }
+        };
+
+        // Remap memdict
+        self.mem.one_var = total_witness;
+        for tensor in self.mem.mem_dict.iter_mut() {
+            tensor.start = new_index(tensor.start);
+        }
+
+        // Remap a, b, c
+        for a in self.a.iter_mut() { a.1 = new_index(a.1); }
+        for b in self.b.iter_mut() { b.1 = new_index(b.1); }
+        for c in self.c.iter_mut() { c.1 = new_index(c.1); }
+
+        // Remap sum
+        for (params, r) in self.compute.iter_mut() {
+            if let Functions::Sum = r {
+                for data in params[1..].iter_mut() {
+                    data.memory_id = new_index(unsafe{data.memory_id});
+                }
+            }
         }
     }
 
@@ -121,13 +201,20 @@ impl ConstraintSystem {
     }
 
     pub fn compute(&self, var_dict: &mut Memory) {
-        for (params, func) in &self.compute {
-            func(&self.mem, &params, var_dict);
+        for (params, func) in self.compute.iter() {
+            Self::FUNCTIONS[*func as usize](&self.mem, &params, var_dict);
         }
     }
 
     pub fn cons_size(&self) -> u32 {
         return self.n_cons;
+    }
+
+    fn run_mul(mem: &MemoryManager, param: &[MemAddress], var_dict: &mut Memory) {
+        let (a, b, res) = unsafe{(param[0].block_id, param[1].block_id, param[2].block_id)};
+        for (x, y, z) in izip!(mem[a].iter(), mem[b].iter(), mem[res].iter()) {
+            var_dict[z as usize] = var_dict[x as usize] * var_dict[y as usize];
+        }
     }
 
     pub fn mul(&mut self, a: TensorAddress, b: TensorAddress, res: TensorAddress) {
@@ -137,14 +224,16 @@ impl ConstraintSystem {
             self.c.push((self.n_cons, z, 1));
             self.n_cons += 1;
         }
-        fn run(mem: &MemoryManager, param: &[MemAddress], var_dict: &mut Memory) {
-            let (a, b, res) = unsafe{(param[0].block_id, param[1].block_id, param[2].block_id)};
-            for (x, y, z) in izip!(mem[a].iter(), mem[b].iter(), mem[res].iter()) {
-                var_dict[z as usize] = var_dict[x as usize] * var_dict[y as usize];
-            }
-        }
 
-        self.compute.push((Box::new([MemAddress{block_id: a}, MemAddress{block_id: b}, MemAddress{block_id: res}]), run));
+        self.compute.push((Box::new([MemAddress{block_id: a}, MemAddress{block_id: b}, MemAddress{block_id: res}]), Functions::Mul));
+    }
+
+    fn run_sum(mem: &MemoryManager, param: &[MemAddress], var_dict: &mut Memory) {
+        let mut res: Scalar = if param.len() == 3 {var_dict[unsafe {param[2].memory_id} as usize]} else {0};
+        for x in mem[unsafe {param[0].block_id}].iter() {
+            res += var_dict[x as usize];
+        }
+        var_dict[unsafe {param[1].memory_id} as usize] = res;
     }
 
     pub fn sum(&mut self, inp: TensorAddress, out: ScalarAddress, init: Option<u32>) {
@@ -155,22 +244,15 @@ impl ConstraintSystem {
         for x in self.mem[inp].iter() {
             self.a.push((self.n_cons, x, 1));
         }
-        self.b.push((self.n_cons, MemoryManager::ONE_VAR, 1));
+        self.b.push((self.n_cons, self.mem.one_var, 1));
         self.c.push((self.n_cons, out, 1));
         self.n_cons += 1;
 
-        fn run(mem: &MemoryManager, param: &[MemAddress], var_dict: &mut Memory) {
-            let mut res: Scalar = if param.len() == 3 {var_dict[unsafe {param[2].memory_id} as usize]} else {0};
-            for x in mem[unsafe {param[0].block_id}].iter() {
-                res += var_dict[x as usize];
-            }
-            var_dict[unsafe {param[1].memory_id} as usize] = res;
-        }
         let mut params = vec![MemAddress{block_id: inp}, MemAddress{memory_id: out}];
         if let Some(x) = init {
             params.push(MemAddress{memory_id: x});
         }
-        self.compute.push((params.into_boxed_slice(), run));
+        self.compute.push((params.into_boxed_slice(), Functions::Sum));
     }
 
     pub fn conv2d(&mut self, input: TensorAddress, output: TensorAddress, weight: TensorAddress, bias: Option<(TensorAddress, u32)>) {
@@ -209,6 +291,32 @@ impl ConstraintSystem {
         }
     }
 
+    fn run_decompose(mem: &MemoryManager, param: &[MemAddress], var_dict: &mut Memory) {
+        let (input, output, sign, abs) = unsafe{(param[0].block_id, param[1].block_id, param[2].block_id, param[3].block_id)};
+        let mut iter = mem[input].iter();
+        loop {
+            let x = iter.next();
+            if let None = x {
+                break
+            }
+            let x = var_dict[x.unwrap() as usize];
+            let idx = &iter.idx;
+            let bits = mem[output].at_(idx);
+            let sign = mem[sign].at_idx(idx);
+            let abs = mem[abs].at_idx(idx);
+
+            var_dict[abs as usize] = x.abs();
+            var_dict[sign as usize] = if x >= 0 {1} else {-1};
+
+            let mut x = x.abs();
+            for bit in bits.iter() {
+                var_dict[bit as usize] = x % 2;
+                x /= 2;
+            }
+            assert_eq!(x, 0);
+        }
+    }
+
     // input should have shape with sign, abs, and output should have one more dimension with length bit size
     pub fn bit_decomposition(&mut self, input: TensorAddress, output: TensorAddress, sign: TensorAddress, abs: TensorAddress) {
         let mut iter = self.mem[input].iter();
@@ -232,7 +340,7 @@ impl ConstraintSystem {
             // sign only = +-1 <=> sign^2 == 1
             self.a.push((self.n_cons, sign, 1));
             self.b.push((self.n_cons, sign, 1));
-            self.c.push((self.n_cons, MemoryManager::ONE_VAR, 1));
+            self.c.push((self.n_cons, self.mem.one_var, 1));
             self.n_cons += 1;
 
             let sum_cons = self.n_cons;
@@ -251,33 +359,9 @@ impl ConstraintSystem {
             }
         }
 
-        fn run(mem: &MemoryManager, param: &[MemAddress], var_dict: &mut Memory) {
-            let (input, output, sign, abs) = unsafe{(param[0].block_id, param[1].block_id, param[2].block_id, param[3].block_id)};
-            let mut iter = mem[input].iter();
-            loop {
-                let x = iter.next();
-                if let None = x {
-                    break
-                }
-                let x = var_dict[x.unwrap() as usize];
-                let idx = &iter.idx;
-                let bits = mem[output].at_(idx);
-                let sign = mem[sign].at_idx(idx);
-                let abs = mem[abs].at_idx(idx);
 
-                var_dict[abs as usize] = x.abs();
-                var_dict[sign as usize] = if x >= 0 {1} else {-1};
-
-                let mut x = x.abs();
-                for bit in bits.iter() {
-                    var_dict[bit as usize] = x % 2;
-                    x /= 2;
-                }
-                assert_eq!(x, 0);
-            }
-        }
         let params = Box::new([MemAddress{block_id: input}, MemAddress{block_id: output}, MemAddress{block_id: sign}, MemAddress{block_id: abs}]);
-        self.compute.push((params, run));
+        self.compute.push((params, Functions::Decompose));
     }
 
     pub fn sign(&mut self, input: TensorAddress, output: TensorAddress, max_bits: u8) {
@@ -286,6 +370,13 @@ impl ConstraintSystem {
         dim.push(max_bits as u32);
         let bits = self.mem.alloc(&dim);
         self.bit_decomposition(input, bits, output, abs);
+    }
+
+    fn run_relu(mem: &MemoryManager, param: &[MemAddress], var_dict: &mut Memory) {
+        for (input, output) in izip!(mem[unsafe {param[0].block_id}].iter(), mem[unsafe {param[1].block_id}].iter()) {
+            let x = var_dict[input as usize];
+            var_dict[output as usize] = if x >= 0 {x} else {0};
+        }
     }
 
     pub fn relu(&mut self, input: TensorAddress, output: TensorAddress, max_bits: u8) {
@@ -303,14 +394,28 @@ impl ConstraintSystem {
             self.n_cons += 1;
         }
 
-        fn run(mem: &MemoryManager, param: &[MemAddress], var_dict: &mut Memory) {
-            for (input, output) in izip!(mem[unsafe {param[0].block_id}].iter(), mem[unsafe {param[1].block_id}].iter()) {
-                let x = var_dict[input as usize];
-                var_dict[output as usize] = if x >= 0 {x} else {0};
+        let params = Box::new([MemAddress{block_id: input}, MemAddress{block_id: output}]);
+        self.compute.push((params, Functions::Relu));
+    }
+
+    fn run_max_pool(mem: &MemoryManager, param: &[MemAddress], var_dict: &mut Memory) {
+        let (input, output, temp) = unsafe{(param[0].block_id, param[1].block_id, param[2].block_id)};
+        for layer in 0..mem[input].dim[0] {
+            let input = mem[input].at_(&[layer]);
+            let output = mem[output].at_(&[layer]);
+            for i in 0..input.dim[0]/2 {
+                for j in 0..input.dim[1]/2 {
+                    let t = [mem[temp].at_idx(&[layer, i, j, 0]), mem[temp].at_idx(&[layer, i, j, 1])];
+                    let mut val = [0,0];
+                    for k in 0..2 {
+                        val[k] = (var_dict[input.at_idx(&[2*i + k as u32, 2*j]) as usize] - 1)
+                                *(var_dict[input.at_idx(&[2*i + k as u32, 2*j + 1]) as usize] - 1) /2;
+                        var_dict[t[k] as usize] = val[k];
+                    }
+                    var_dict[output.at_idx(&[i,j]) as usize] = -val[0] * val[1]/2 + 1;
+                }
             }
         }
-        let params = Box::new([MemAddress{block_id: input}, MemAddress{block_id: output}]);
-        self.compute.push((params, run));
     }
 
     // input tensor 3d
@@ -326,42 +431,23 @@ impl ConstraintSystem {
                     let t = [self.mem[temp].at_idx(&[layer, i, j, 0]), self.mem[temp].at_idx(&[layer, i, j, 1])];
                     for k in 0..2 {
                         self.a.push((self.n_cons, input.at_idx(&[2*i + k, 2*j]), 1));
-                        self.a.push((self.n_cons, MemoryManager::ONE_VAR, -1));
+                        self.a.push((self.n_cons, self.mem.one_var, -1));
                         self.b.push((self.n_cons, input.at_idx(&[2*i + k, 2*j + 1]), 1));
-                        self.b.push((self.n_cons, MemoryManager::ONE_VAR, -1));
+                        self.b.push((self.n_cons, self.mem.one_var, -1));
                         self.c.push((self.n_cons, t[k as usize], 2));
                         self.n_cons += 1;
                     }
                     self.a.push((self.n_cons, t[0], 1));
                     self.b.push((self.n_cons, t[1], 1));
                     self.c.push((self.n_cons,  output.at_idx(&[i,j]), -2));
-                    self.c.push((self.n_cons,  MemoryManager::ONE_VAR, 2));
+                    self.c.push((self.n_cons,  self.mem.one_var, 2));
                     self.n_cons += 1;
                 }
             }
         }
 
-        fn run(mem: &MemoryManager, param: &[MemAddress], var_dict: &mut Memory) {
-            let (input, output, temp) = unsafe{(param[0].block_id, param[1].block_id, param[2].block_id)};
-            for layer in 0..mem[input].dim[0] {
-                let input = mem[input].at_(&[layer]);
-                let output = mem[output].at_(&[layer]);
-                for i in 0..input.dim[0]/2 {
-                    for j in 0..input.dim[1]/2 {
-                        let t = [mem[temp].at_idx(&[layer, i, j, 0]), mem[temp].at_idx(&[layer, i, j, 1])];
-                        let mut val = [0,0];
-                        for k in 0..2 {
-                            val[k] = (var_dict[input.at_idx(&[2*i + k as u32, 2*j]) as usize] - 1)
-                                    *(var_dict[input.at_idx(&[2*i + k as u32, 2*j + 1]) as usize] - 1) /2;
-                            var_dict[t[k] as usize] = val[k];
-                        }
-                        var_dict[output.at_idx(&[i,j]) as usize] = -val[0] * val[1]/2 + 1;
-                    }
-                }
-            }
-        }
         let params = Box::new([MemAddress{block_id: input}, MemAddress{block_id: output}, MemAddress{block_id: temp}]);
-        self.compute.push((params, run));
+        self.compute.push((params, Functions::MaxPool));
     }
 
     pub fn fully_connected(&mut self, input: TensorAddress, output: TensorAddress, weight: TensorAddress, bias: Option<TensorAddress>) {
@@ -383,7 +469,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn mul_circuit_test() {
+    fn mul_cons_test() {
         let mut x = ConstraintSystem::new();
         let a = x.mem.alloc(&[3]);
         let b = x.mem.alloc(&[3]);
@@ -398,7 +484,7 @@ mod tests {
     }
 
     #[test]
-    fn sum_circuit_test() {
+    fn sum_cons_test() {
         let mut x = ConstraintSystem::new();
         let a = x.mem.alloc(&[3]);
         let bias = x.mem.alloc_single();
@@ -488,6 +574,28 @@ mod tests {
         mem[8..18].copy_from_slice(&[-2,3,-2,5,3,-1,5,0,3,2]);
         x.compute(&mut mem);
         assert_eq!(mem[6..8], [0, -1]);
+        x.sort_cons();
+        assert!(x.verify(&mem));
+    }
+
+    #[test]
+    fn move_test() {
+        let mut x = ConstraintSystem::new();
+        let input = x.mem.alloc(&[5]);
+        let output = x.mem.alloc(&[2]);
+        let weight = x.mem.alloc(&[2,5]);
+        let bias = x.mem.alloc(&[2]);
+        x.fully_connected(input, output, weight, Some(bias));
+        x.reorder_for_spartan(&[input, output]);
+
+        let mut mem = x.mem.new_memory();
+        println!("{} {} {}", x.mem[input].begin(), x.mem[input].end(), x.mem.one_var);
+        println!("{} {} {}", x.mem[output].begin(), x.mem[output].end(), x.mem.one_var);
+
+        x.load_memory(input, &mut mem, &[2,-2,4,3,1]);
+        x.load_memory(weight, &mut mem, &[-2,3,-2,5,3,-1,5,0,3,2]);
+        x.compute(&mut mem);
+        assert_eq!(mem[x.mem[output].begin() as usize .. x.mem[output].end() as usize], [0, -1]);
         x.sort_cons();
         assert!(x.verify(&mem));
     }
