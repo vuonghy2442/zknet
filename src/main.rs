@@ -14,5 +14,5 @@ fn main() {
     }
     println!("");
 
-    zk::prove(network, &mut memory);
+    zk::prove_nizk(network, &mut memory);
 }

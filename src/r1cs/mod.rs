@@ -5,6 +5,7 @@ use crate::tensor::TensorIndex::Id;
 use crate::tensor::TensorIndex::Range;
 use crate::tensor::TensorIndex::RangeFull;
 use std::ops::{Index};
+use std::cmp::max;
 
 pub type Scalar = i32;
 type ScalarAddress = u32;
@@ -163,7 +164,7 @@ impl ConstraintSystem {
         }
     }
 
-    pub fn get_spartan_instance(&self) -> (libspartan::Instance, usize, usize, usize) {
+    pub fn get_spartan_instance(&self) -> (libspartan::Instance, usize, usize, usize, usize) {
         fn parse_matrix(mat: &[(u32, u32, i32)]) -> Vec<(usize, usize, [u8; 32])> {
             let mut ans: Vec<(usize, usize, [u8; 32])> = Vec::with_capacity(mat.len());
             for row in mat {
@@ -177,11 +178,12 @@ impl ConstraintSystem {
         let num_cons = self.n_cons as usize;
         let num_vars = self.mem.one_var as usize;
         let num_inputs = (self.mem.n_var - self.mem.one_var - 1) as usize;
+        let non_zeros=max(max(self.a.len(),self.b.len()),self.c.len());
         (libspartan::Instance::new(num_cons,
             num_vars,
             num_inputs,
             &parse_matrix(&self.a), &parse_matrix(&self.b), &parse_matrix(&self.c)
-        ).unwrap(), num_cons, num_vars, num_inputs)
+        ).unwrap(), num_cons, num_vars, num_inputs, non_zeros)
     }
 
     pub fn sort_cons(&mut self) {

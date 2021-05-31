@@ -124,7 +124,7 @@ impl NeuralNetwork {
         memory
     }
 
-    pub fn get_spartan_instance(&self) -> (libspartan::Instance, usize, usize, usize) {
+    pub fn get_spartan_instance(&self) -> (libspartan::Instance, usize, usize, usize, usize) {
         return self.cons.get_spartan_instance();
     }
 
