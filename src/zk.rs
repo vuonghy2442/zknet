@@ -2,21 +2,13 @@ extern crate curve25519_dalek;
 
 use crate::nn;
 use libspartan::{InputsAssignment, NIZKGens, VarsAssignment, NIZK, SNARKGens, SNARK};
-use curve25519_dalek::scalar::Scalar as SpartanScalar;
 
 use merlin::Transcript;
 use std::fs::File;
 use std::io::Write;
+use curve25519_dalek::scalar::Scalar;
 
-pub fn to_bytes(val: i32) -> [u8; 32] {
-    if val < 0 {
-        (-SpartanScalar::from((-val) as u32)).to_bytes()
-    } else {
-        SpartanScalar::from(val as u32).to_bytes()
-    }
-}
-
-pub fn prove_nizk(network: nn::NeuralNetwork, memory: &[crate::r1cs::Scalar]) {
+pub fn prove_nizk(network: nn::NeuralNetwork, memory: &[Scalar]) {
     let (inst, num_cons, num_vars, num_inputs,_) = network.get_spartan_instance();
     let gens = NIZKGens::new(num_cons, num_vars, num_inputs);
 
@@ -24,13 +16,13 @@ pub fn prove_nizk(network: nn::NeuralNetwork, memory: &[crate::r1cs::Scalar]) {
     let mut inps: Vec<[u8; 32]> = Vec::with_capacity(num_inputs);
     for (i, &val) in memory.iter().enumerate() {
         if i == num_vars {
-            assert!(val == 1);
+            assert!(val == Scalar::one());
             continue;
         }
         if i < num_vars {
-            vars.push(to_bytes(val));
+            vars.push(val.to_bytes());
         } else {
-            inps.push(to_bytes(val));
+            inps.push(val.to_bytes());
         }
     }
     let assignment_vars = VarsAssignment::new(&vars).unwrap();
@@ -61,7 +53,7 @@ pub fn prove_nizk(network: nn::NeuralNetwork, memory: &[crate::r1cs::Scalar]) {
 }
 
 
-pub fn prove_zk_snark(network: nn::NeuralNetwork, memory: &[crate::r1cs::Scalar]) {
+pub fn prove_zk_snark(network: nn::NeuralNetwork, memory: &[Scalar]) {
     let (inst, num_cons, num_vars, num_inputs,non_zero) = network.get_spartan_instance();
     let gens = SNARKGens::new(num_cons, num_vars, num_inputs,non_zero);
     let (comm, decomm) = SNARK::encode(&inst, &gens);
@@ -70,13 +62,13 @@ pub fn prove_zk_snark(network: nn::NeuralNetwork, memory: &[crate::r1cs::Scalar]
     let mut inps: Vec<[u8; 32]> = Vec::with_capacity(num_inputs);
     for (i, &val) in memory.iter().enumerate() {
         if i == num_vars {
-            assert!(val == 1);
+            assert!(val == Scalar::one());
             continue;
         }
         if i < num_vars {
-            vars.push(to_bytes(val));
+            vars.push(val.to_bytes());
         } else {
-            inps.push(to_bytes(val));
+            inps.push(val.to_bytes());
         }
     }
     let assignment_vars = VarsAssignment::new(&vars).unwrap();

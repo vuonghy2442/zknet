@@ -1,10 +1,10 @@
 use crate::r1cs::ConstraintSystem;
-use crate::r1cs::TensorAddress;
-use crate::r1cs::Scalar;
+use crate::r1cs::{TensorAddress, slice_to_scalar};
 use std::cmp::max;
 use serde_pickle::from_reader;
 use std::fs::File;
 use std::collections::HashMap;
+use curve25519_dalek::scalar::Scalar;
 
 macro_rules! hashmap {
     ($( $key: expr => $val: expr ),*) => {{
@@ -119,7 +119,7 @@ impl NeuralNetwork {
 
         let mut memory = self.cons.mem.new_memory();
         for (key, address) in self.weight_map.iter() {
-            self.cons.load_memory(*address, &mut memory, &weight[key])
+            self.cons.load_memory(*address, &mut memory, &slice_to_scalar(&weight[key]))
         };
         memory
     }
