@@ -6,18 +6,18 @@ use crate::tensor::TensorIndex::Range;
 use crate::tensor::TensorIndex::RangeFull;
 use std::ops::{Index};
 use std::cmp::max;
-use curve25519_dalek::scalar::Scalar;
+use curve25519_dalek::scalar::Scalar as BigScalar;
 
-pub fn to_scalar(val: i32) -> Scalar {
+pub fn to_scalar(val: i32) -> BigScalar {
     if val < 0 {
-        -Scalar::from((-val) as u32)
+        -BigScalar::from((-val) as u32)
     } else {
-        Scalar::from(val as u32)
+        BigScalar::from(val as u32)
     }
 }
 
-pub fn slice_to_scalar(data: &[i32]) -> Vec<Scalar> {
-    let mut mem: Vec<Scalar> = Vec::new();
+pub fn slice_to_scalar(data: &[i32]) -> Vec<BigScalar> {
+    let mut mem: Vec<BigScalar> = Vec::new();
     for &val in data.iter() {
         mem.push(to_scalar(val));
     }
@@ -27,7 +27,55 @@ pub fn slice_to_scalar(data: &[i32]) -> Vec<Scalar> {
 type ScalarAddress = u32;
 pub type TensorAddress = u32;
 
-union MemAddress {
+type Memory<T> = [T];
+
+pub trait Functional: Sized {
+    const FUNCTIONS: [fn(mem: &MemoryManager, &[MemAddress], &mut [Self]); 5];
+}
+
+pub trait Scalar: std::ops::Mul<Self, Output=Self> + std::ops::MulAssign<Self> + std::ops::Add<Self, Output=Self> + std::ops::AddAssign<Self> + std::ops::Neg<Output=Self> + std::cmp::Eq + Functional + Clone + Copy {
+    fn one() -> Self;
+    fn zero() -> Self;
+    fn from_i32(x: i32) -> Self;
+    fn is_nonneg(&self) -> bool;
+    fn to_bytes(&self) -> Vec<u8>;
+}
+
+impl<T:Scalar> Functional for T {
+    const FUNCTIONS: [fn(mem: &MemoryManager, &[MemAddress], &mut [T]); 5] = [
+        ConstraintSystem::run_sum::<T>,
+        ConstraintSystem::run_mul::<T>,
+        ConstraintSystem::run_decompose::<T>,
+        ConstraintSystem::run_relu::<T>,
+        ConstraintSystem::run_max_pool::<T>
+    ];
+}
+
+impl Scalar for i32 {
+    fn one() -> i32 {1}
+    fn zero() -> i32 {0}
+    fn from_i32(x: i32) -> i32 { x }
+    fn is_nonneg(&self) -> bool {*self >= 0}
+    fn to_bytes(&self) -> Vec<u8> {
+        let mut res: Vec<u8> = Vec::with_capacity(4);
+        let mut x = *self;
+        for _ in 0..4 {
+            res.push((x & 255) as u8);
+            x >>= 8;
+        }
+        res
+    }
+}
+
+impl Scalar for BigScalar {
+    fn one() -> BigScalar {BigScalar::one()}
+    fn zero() -> BigScalar {BigScalar::zero()}
+    fn from_i32(x: i32) -> BigScalar { if x < 0 {-BigScalar::from((-x) as u32)} else {BigScalar::from(x as u32)}}
+    fn is_nonneg(&self) -> bool { (self.as_bytes()[31] >> 4) == 0 }
+    fn to_bytes(&self) -> Vec<u8> {self.to_bytes().to_vec()}
+}
+
+pub union MemAddress {
     block_id: TensorAddress,
     memory_id: ScalarAddress
 }
@@ -64,10 +112,10 @@ impl MemoryManager {
         (self.mem_dict.len() - 1) as TensorAddress
     }
 
-    pub fn new_memory(&self) -> Vec<Scalar> {
-        let mut var_dict: Vec<Scalar> = Vec::new();
-        var_dict.resize(self.n_var as usize, Scalar::zero());
-        var_dict[self.one_var as usize] = Scalar::one();
+    pub fn new_memory<T : Scalar>(&self) -> Vec<T> {
+        let mut var_dict: Vec<T> = Vec::new();
+        var_dict.resize(self.n_var as usize, T::zero());
+        var_dict[self.one_var as usize] = T::one();
         var_dict
     }
 }
@@ -78,12 +126,11 @@ impl Index<TensorAddress> for MemoryManager {
         &self.mem_dict[idx as usize]
     }
 }
-type Memory = [Scalar];
 
 pub struct ConstraintSystem {
-    a: Vec<(u32, u32, Scalar)>,
-    b: Vec<(u32, u32, Scalar)>,
-    c: Vec<(u32, u32, Scalar)>,
+    a: Vec<(u32, u32, BigScalar)>,
+    b: Vec<(u32, u32, BigScalar)>,
+    c: Vec<(u32, u32, BigScalar)>,
     n_cons: u32,
     pub mem: MemoryManager,
     compute: Vec<(Box<[MemAddress]>, Functions)>
@@ -99,14 +146,6 @@ enum Functions {
 }
 
 impl ConstraintSystem {
-    const FUNCTIONS: [fn(mem: &MemoryManager, &[MemAddress], &mut Memory); 5] = [
-        Self::run_sum,
-        Self::run_mul,
-        Self::run_decompose,
-        Self::run_relu,
-        Self::run_max_pool
-    ];
-
     pub fn new() -> ConstraintSystem {
         ConstraintSystem {
             a: Vec::new(),
@@ -181,7 +220,7 @@ impl ConstraintSystem {
     }
 
     pub fn get_spartan_instance(&self) -> (libspartan::Instance, usize, usize, usize, usize) {
-        fn parse_matrix(mat: &[(u32, u32, Scalar)]) -> Vec<(usize, usize, [u8; 32])> {
+        fn parse_matrix(mat: &[(u32, u32, BigScalar)]) -> Vec<(usize, usize, [u8; 32])> {
             let mut ans: Vec<(usize, usize, [u8; 32])> = Vec::with_capacity(mat.len());
             for row in mat {
                 let u = row.0 as usize;
@@ -208,10 +247,10 @@ impl ConstraintSystem {
         self.c.sort_unstable_by_key(|x| (x.0,x.1));
     }
 
-    pub fn verify(&self, var_dict: &[Scalar]) -> bool {
+    pub fn verify(&self, var_dict: &Memory<BigScalar>) -> bool {
         let (mut ai, mut bi, mut ci) = (0, 0, 0);
         for i in 0..self.n_cons {
-            let (mut sa, mut sb, mut sc) = (Scalar::zero(), Scalar::zero(), Scalar::zero());
+            let (mut sa, mut sb, mut sc) = (BigScalar::zero(), BigScalar::zero(), BigScalar::zero());
             while ai < self.a.len() && self.a[ai].0 == i {
                 sa += var_dict[self.a[ai].1 as usize] * self.a[ai].2;
                 ai += 1;
@@ -234,16 +273,16 @@ impl ConstraintSystem {
         return true;
     }
 
-    pub fn load_memory(&self, tensor: TensorAddress, var_dict: &mut Memory, data: &[Scalar]) {
+    pub fn load_memory<T: Scalar>(&self, tensor: TensorAddress, var_dict: &mut Memory<T>, data: &Memory<T>) {
         assert_eq!(self.mem[tensor].size(), data.len() as u32);
         for (pos, &data) in izip!(self.mem[tensor].iter(), data) {
             var_dict[pos as usize] = data;
         }
     }
 
-    pub fn compute(&self, var_dict: &mut Memory) {
+    pub fn compute<T: Scalar>(&self, var_dict: &mut Memory<T>) {
         for (params, func) in self.compute.iter() {
-            Self::FUNCTIONS[*func as usize](&self.mem, &params, var_dict);
+            T::FUNCTIONS[*func as usize](&self.mem, &params, var_dict);
         }
     }
 
@@ -251,7 +290,7 @@ impl ConstraintSystem {
         return self.n_cons;
     }
 
-    fn run_mul(mem: &MemoryManager, param: &[MemAddress], var_dict: &mut Memory) {
+    fn run_mul<T: Scalar>(mem: &MemoryManager, param: &[MemAddress], var_dict: &mut Memory<T>) {
         let (a, b, res) = unsafe{(param[0].block_id, param[1].block_id, param[2].block_id)};
         for (x, y, z) in izip!(mem[a].iter(), mem[b].iter(), mem[res].iter()) {
             var_dict[z as usize] = var_dict[x as usize] * var_dict[y as usize];
@@ -269,8 +308,8 @@ impl ConstraintSystem {
         self.compute.push((Box::new([MemAddress{block_id: a}, MemAddress{block_id: b}, MemAddress{block_id: res}]), Functions::Mul));
     }
 
-    fn run_sum(mem: &MemoryManager, param: &[MemAddress], var_dict: &mut Memory) {
-        let mut res: Scalar = if param.len() == 3 {var_dict[unsafe {param[2].memory_id} as usize]} else {Scalar::zero()};
+    fn run_sum<T: Scalar>(mem: &MemoryManager, param: &[MemAddress], var_dict: &mut Memory<T>) {
+        let mut res: T = if param.len() == 3 {var_dict[unsafe {param[2].memory_id} as usize]} else {T::zero()};
         for x in mem[unsafe {param[0].block_id}].iter() {
             res += var_dict[x as usize];
         }
@@ -332,12 +371,7 @@ impl ConstraintSystem {
         }
     }
 
-    // Becareful when use this
-    fn positive(x: &Scalar) -> bool {
-        return (x.as_bytes()[31] >> 4) == 0;
-    }
-
-    fn run_decompose(mem: &MemoryManager, param: &[MemAddress], var_dict: &mut Memory) {
+    fn run_decompose<T: Scalar>(mem: &MemoryManager, param: &[MemAddress], var_dict: &mut Memory<T>) {
         let (input, output, sign, abs) = unsafe{(param[0].block_id, param[1].block_id, param[2].block_id, param[3].block_id)};
         let mut iter = mem[input].iter();
         loop {
@@ -351,14 +385,14 @@ impl ConstraintSystem {
             let sign = mem[sign].at_idx(idx);
             let abs = mem[abs].at_idx(idx);
 
-            let positive = Self::positive(&x);
+            let positive = x.is_nonneg();
 
-            var_dict[sign as usize] = if positive {Scalar::one()} else {-Scalar::one()};
+            var_dict[sign as usize] = if positive {T::one()} else {-T::one()};
             var_dict[abs as usize] = if positive {x} else {-x};
 
-            let data = var_dict[abs as usize].reduce().to_bytes();
+            let data = var_dict[abs as usize].to_bytes();
             for (i, bit) in bits.iter().enumerate() {
-                var_dict[bit as usize] = Scalar::from((data[i/8] >> (i%8)) & 1);
+                var_dict[bit as usize] = T::from_i32(((data[i/8] >> (i%8)) & 1) as i32);
             }
         }
     }
@@ -394,13 +428,13 @@ impl ConstraintSystem {
 
             let mut pow: u32 = 1;
             for bit in bits.iter() {
-                self.a.push((sum_cons, bit, Scalar::from(pow)));
+                self.a.push((sum_cons, bit, BigScalar::from(pow)));
                 pow *= 2;
 
                 // bit only 0 or 1 <=> bit^2 = bit
-                self.a.push((self.n_cons, bit, Scalar::one()));
-                self.b.push((self.n_cons, bit, Scalar::one()));
-                self.c.push((self.n_cons, bit, Scalar::one()));
+                self.a.push((self.n_cons, bit, BigScalar::one()));
+                self.b.push((self.n_cons, bit, BigScalar::one()));
+                self.c.push((self.n_cons, bit, BigScalar::one()));
                 self.n_cons += 1;
             }
         }
@@ -418,10 +452,10 @@ impl ConstraintSystem {
         self.bit_decomposition(input, bits, output, abs);
     }
 
-    fn run_relu(mem: &MemoryManager, param: &[MemAddress], var_dict: &mut Memory) {
+    fn run_relu<T: Scalar>(mem: &MemoryManager, param: &[MemAddress], var_dict: &mut Memory<T>) {
         for (input, output) in izip!(mem[unsafe {param[0].block_id}].iter(), mem[unsafe {param[1].block_id}].iter()) {
             let x = var_dict[input as usize];
-            var_dict[output as usize] = if Self::positive(&x) {x} else {Scalar::zero()}; // hic hic here
+            var_dict[output as usize] = if x.is_nonneg() {x} else {T::zero()}; // hic hic here
         }
     }
 
@@ -434,9 +468,9 @@ impl ConstraintSystem {
         self.bit_decomposition(input, bits, sign, abs);
 
         for (abs, input, output) in izip!(self.mem[abs].iter(), self.mem[input].iter(), self.mem[output].iter()) {
-            self.a.push((self.n_cons, input, Scalar::one()));
-            self.a.push((self.n_cons, abs, Scalar::one()));
-            self.a.push((self.n_cons, output, Scalar::from(2u32)));
+            self.a.push((self.n_cons, input, BigScalar::one()));
+            self.a.push((self.n_cons, abs, BigScalar::one()));
+            self.a.push((self.n_cons, output, BigScalar::from(2u32)));
             self.n_cons += 1;
         }
 
@@ -444,16 +478,7 @@ impl ConstraintSystem {
         self.compute.push((params, Functions::Relu));
     }
 
-    fn shift_right(x: &Scalar, k: u8) -> Scalar {
-        let mut res = x.reduce().to_bytes();
-        for i in 0..res.len()-1 {
-            res[i] = (res[i] >> k) | (res[i+1] << (8 - k));
-        }
-        res[res.len()-1] >>= k;
-        Scalar::from_bits(res)
-    }
-
-    fn run_max_pool(mem: &MemoryManager, param: &[MemAddress], var_dict: &mut Memory) {
+    fn run_max_pool<T: Scalar>(mem: &MemoryManager, param: &[MemAddress], var_dict: &mut Memory<T>) {
         let (input, output, temp) = unsafe{(param[0].block_id, param[1].block_id, param[2].block_id)};
         for layer in 0..mem[input].dim[0] {
             let input = mem[input].at_(&[layer]);
@@ -461,20 +486,20 @@ impl ConstraintSystem {
             for i in 0..input.dim[0]/2 {
                 for j in 0..input.dim[1]/2 {
                     let t = [mem[temp].at_idx(&[layer, i, j, 0]), mem[temp].at_idx(&[layer, i, j, 1])];
-                    let mut val = [Scalar::zero(),Scalar::zero()];
+                    let mut val = [T::zero(),T::zero()];
                     for k in 0..2 {
-                        val[k] = if var_dict[input.at_idx(&[2*i + k as u32, 2*j]) as usize] == Scalar::one() ||
-                                    var_dict[input.at_idx(&[2*i + k as u32, 2*j + 1]) as usize] == Scalar::one() {
-                            Scalar::zero()
+                        val[k] = if var_dict[input.at_idx(&[2*i + k as u32, 2*j]) as usize] == T::one() ||
+                                    var_dict[input.at_idx(&[2*i + k as u32, 2*j + 1]) as usize] == T::one() {
+                            T::zero()
                         } else {
-                            Scalar::from(2u8)
+                            T::from_i32(2)
                         };
                         var_dict[t[k] as usize] = val[k];
                     }
-                    var_dict[output.at_idx(&[i,j]) as usize] = if val[0] == Scalar::zero() || val[1] == Scalar::zero() {
-                        Scalar::one()
+                    var_dict[output.at_idx(&[i,j]) as usize] = if val[0] == T::zero() || val[1] == T::zero() {
+                        T::one()
                     } else {
-                        -Scalar::one()
+                        -T::one()
                     };
                 }
             }
@@ -493,17 +518,17 @@ impl ConstraintSystem {
                 for j in 0..input.dim[1]/2 {
                     let t = [self.mem[temp].at_idx(&[layer, i, j, 0]), self.mem[temp].at_idx(&[layer, i, j, 1])];
                     for k in 0..2 {
-                        self.a.push((self.n_cons, input.at_idx(&[2*i + k, 2*j]), Scalar::one()));
-                        self.a.push((self.n_cons, self.mem.one_var, -Scalar::one()));
-                        self.b.push((self.n_cons, input.at_idx(&[2*i + k, 2*j + 1]), Scalar::one()));
-                        self.b.push((self.n_cons, self.mem.one_var, -Scalar::one()));
-                        self.c.push((self.n_cons, t[k as usize], Scalar::from(2u32)));
+                        self.a.push((self.n_cons, input.at_idx(&[2*i + k, 2*j]), BigScalar::one()));
+                        self.a.push((self.n_cons, self.mem.one_var, -BigScalar::one()));
+                        self.b.push((self.n_cons, input.at_idx(&[2*i + k, 2*j + 1]), BigScalar::one()));
+                        self.b.push((self.n_cons, self.mem.one_var, -BigScalar::one()));
+                        self.c.push((self.n_cons, t[k as usize], BigScalar::from(2u32)));
                         self.n_cons += 1;
                     }
-                    self.a.push((self.n_cons, t[0], Scalar::one()));
-                    self.b.push((self.n_cons, t[1], Scalar::one()));
-                    self.c.push((self.n_cons,  output.at_idx(&[i,j]), -Scalar::from(2u32)));
-                    self.c.push((self.n_cons,  self.mem.one_var, Scalar::from(2u32)));
+                    self.a.push((self.n_cons, t[0], BigScalar::one()));
+                    self.b.push((self.n_cons, t[1], BigScalar::one()));
+                    self.c.push((self.n_cons,  output.at_idx(&[i,j]), -BigScalar::from(2u32)));
+                    self.c.push((self.n_cons,  self.mem.one_var, BigScalar::from(2u32)));
                     self.n_cons += 1;
                 }
             }
@@ -555,7 +580,7 @@ mod tests {
         let c = x.mem.alloc(&[3]);
         x.mul(a, b, c);
 
-        let mut mem: Vec<Scalar> = slice_to_scalar(&[1,5,2,3,1,6,3,0,0,0]);
+        let mut mem: Vec<BigScalar> = slice_to_scalar(&[1,5,2,3,1,6,3,0,0,0]);
         x.compute(&mut mem);
         assert_eq!(mem[7..10], slice_to_scalar(&[5, 12, 9]));
         x.sort_cons();
@@ -571,9 +596,9 @@ mod tests {
 
         x.sum(a, res, Some(bias));
 
-        let mut mem: Vec<Scalar> = slice_to_scalar(&[1,5,2,3,-2,0]);
+        let mut mem: Vec<BigScalar> = slice_to_scalar(&[1,5,2,3,-2,0]);
         x.compute(&mut mem);
-        assert_eq!(mem[5], Scalar::from(8u32));
+        assert_eq!(mem[5], BigScalar::from(8u32));
         x.sort_cons();
         assert!(x.verify(&mem));
     }
@@ -588,7 +613,7 @@ mod tests {
 
         x.conv2d(input, output, weight, Some((bias, 1)));
 
-        let mut mem: Vec<Scalar> = slice_to_scalar(&[1,0,1,-1,0,0,0,-2,4,-1,-4,0,3,-4,0,0,0,1,-1,1,-4,2,3,-1,0,-4,2,2,-3,-1,-1,1,2,-1,1,4,4,2,3,-3,0,3,-2,3,0,2,3,3,-2,2,4,3,3,-4,-4,-1,3,1,4,-2,-2,0,-2,4,-3,0,0,0,-2,0,0,0,0,3,4,-3,-4,-1,-1,-4,3,1,-2,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-3,0,-3,0,1,-4,-1,2,0,0,-4,2,1,3,2,-3,4,-3]);
+        let mut mem: Vec<BigScalar> = slice_to_scalar(&[1,0,1,-1,0,0,0,-2,4,-1,-4,0,3,-4,0,0,0,1,-1,1,-4,2,3,-1,0,-4,2,2,-3,-1,-1,1,2,-1,1,4,4,2,3,-3,0,3,-2,3,0,2,3,3,-2,2,4,3,3,-4,-4,-1,3,1,4,-2,-2,0,-2,4,-3,0,0,0,-2,0,0,0,0,3,4,-3,-4,-1,-1,-4,3,1,-2,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-3,0,-3,0,1,-4,-1,2,0,0,-4,2,1,3,2,-3,4,-3]);
         mem.resize(x.mem.n_var as usize, Scalar::zero());
 
         x.compute(&mut mem);
@@ -677,13 +702,5 @@ mod tests {
         assert_eq!(mem[x.mem[output].begin() as usize .. x.mem[output].end() as usize], slice_to_scalar(&[0, -1]));
         x.sort_cons();
         assert!(x.verify(&mem));
-    }
-
-    #[test]
-    fn scalar_test() {
-        let scalar = -Scalar::one();
-        for i in scalar.as_bytes() {
-            print!("{} ", i);
-        }
     }
 }
