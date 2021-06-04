@@ -91,7 +91,7 @@ impl NeuralNetwork {
         let mut c = ConstraintSystem::new();
         let input = c.mem.alloc(&[1,28,28]);
         let input_resized = resize(&mut c, input, &[1, 26, 26]);
-        let (conv1_out, conv1_weight, conv1_bias) = convolution_layer_compact(&mut c, input_resized, [5,5], 20, 0, 25);
+        let (conv1_out, conv1_weight, conv1_bias) = convolution_layer(&mut c, input_resized, [5,5], 20, 0);
         let conv1_out_sign = sign_activation(&mut c, conv1_out, 25);
         let (conv2_out, conv2_weight, conv2_bias) = convolution_layer_compact(&mut c, conv1_out_sign, [3,3], 20, 0, 9);
         let conv2_out_sign = sign_activation(&mut c, conv2_out, 9);
@@ -123,7 +123,7 @@ impl NeuralNetwork {
             cons: c,
             weight_map,
             input,
-            output: fc2_out
+            output: fc2_out,
         }
     }
 

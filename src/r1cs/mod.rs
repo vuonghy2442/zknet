@@ -42,6 +42,7 @@ pub trait Scalar: Debug + std::ops::Mul<Self, Output=Self> + std::ops::MulAssign
     fn to_bytes(&self) -> Vec<u8>;
     fn to_big_scalar(x: &[Self]) -> Vec<BigScalar>;
     fn slice_u32_to_scalar(x: &[u32]) -> Self;
+    fn to_i32(&self) -> i32;
 }
 
 fn pack_four_bytes(x : &[u8]) -> u32 {
@@ -58,6 +59,17 @@ fn scalar_to_vec_u32(x: BigScalar) -> [u32;8]{
     pack_four_bytes(&t[20..24]),
     pack_four_bytes(&t[24..28]),
     pack_four_bytes(&t[28..32])]
+}
+
+pub fn to_vec_i32<T: Scalar>(x: &[T]) -> Vec<i32> {
+    let mut res = Vec::new();
+    for &i in x {
+        let val = i.to_i32();
+        print!("{} ", val);
+        res.push(val);
+    }
+    println!("");
+    res
 }
 
 fn power_of_two(x: u32) -> BigScalar {
@@ -105,6 +117,9 @@ impl Scalar for i32 {
             -((-tmp).as_bytes()[0] as i32)
         }
     }
+    fn to_i32(&self) -> i32 {
+        *self
+    }
 }
 
 impl Scalar for BigScalar {
@@ -126,7 +141,16 @@ impl Scalar for BigScalar {
                                     (x[6] & 255) as u8, ((x[6] >> 8) & 255) as u8, ((x[6] >> 16) & 255) as u8, ((x[6] >>24) & 255) as u8,
                                     (x[7] & 255) as u8, ((x[7] >> 8) & 255) as u8, ((x[7] >> 16) & 255) as u8, ((x[7] >>24) & 255) as u8])
     }
-
+    fn to_i32(&self) -> i32 {
+        if self.is_nonneg() {
+            let val = self.as_bytes();
+            pack_four_bytes(&val[0..4]) as i32
+        } else {
+            let val = -self;
+            let val = val.as_bytes();
+            -(pack_four_bytes(&val[0..4]) as i32)
+        }
+    }
 }
 
 pub struct MemoryManager {
@@ -618,6 +642,7 @@ impl ConstraintSystem {
         let base =  T::from_i32(1 << bit_length);
         let mut is_running = true;
         let mut step = scale;
+        let mut cur_var = in_iter.next().unwrap();
         while is_running {
             let res = if let Some(r) = out_iter.next() {r} else {break};
             let mut pow = T::one();
@@ -627,14 +652,15 @@ impl ConstraintSystem {
                 step -= 1;
                 sum_pow += pow;
                 pow *= base;
-                if step == 0 || i == n_packed - 1 {
-                    if let Some(var) = in_iter.next() {
-                        step = scale;
-                        sum_res += var_dict[var as usize] * sum_pow;
-                        sum_pow = T::zero();
-                    } else {
-                        is_running = false;
-                        break;
+                if step == 0 || i == n_packed - 1{
+                    sum_res += var_dict[cur_var as usize] * sum_pow;
+                    sum_pow = T::zero();
+                }
+                if step == 0 {
+                    step = scale;
+                    match in_iter.next() {
+                        Some(var) => cur_var = var,
+                        None => is_running = false
                     }
                 }
             }
@@ -649,6 +675,7 @@ impl ConstraintSystem {
         let base =  BigScalar::from(1u32 << bit_length);
         let mut is_running = true;
         let mut step = scale;
+        let mut cur_var = in_iter.next().unwrap();
         while is_running {
             let res = if let Some(r) = out_iter.next() {r} else {break};
             let mut pow: BigScalar = BigScalar::one();
@@ -657,14 +684,15 @@ impl ConstraintSystem {
                 step -= 1;
                 sum_pow += pow;
                 pow *= base;
-                if step == 0 || i == n_packed - 1 {
-                    if let Some(var) = in_iter.next() {
-                        step = scale;
-                        self.a.push((self.n_cons, var, sum_pow * offset));
-                        sum_pow = BigScalar::zero();
-                    } else {
-                        is_running = false;
-                        break;
+                if step == 0 || i == n_packed - 1{
+                    self.a.push((self.n_cons, cur_var, sum_pow * offset));
+                    sum_pow = BigScalar::zero();
+                }
+                if step == 0 {
+                    step = scale;
+                    match in_iter.next() {
+                        Some(var) => cur_var = var,
+                        None => is_running = false
                     }
                 }
             }
@@ -694,7 +722,6 @@ impl ConstraintSystem {
         for _ in 0..packed_size + k_col - 1 {
             big_offset = (big_offset * T::from_i32(2) + T::one()) * offset;
         }
-
         for layer_out in 0..fout {
             //matching result
             for r in 0..row_out {
@@ -720,8 +747,7 @@ impl ConstraintSystem {
                         let rc = (k - (k_col - 1)) + c * packed_size;
                         if rc >= mem[output].dim[2] {break};
                         //correct result for rc
-                        let mut res = T::zero();
-                        res += var_dict[mem[extracted].at_idx(&[layer_out,r,c,k]) as usize];
+                        let res = var_dict[mem[extracted].at_idx(&[layer_out,r,c,k]) as usize];
                         var_dict[mem[output].at_idx(&[layer_out,r,rc]) as usize] = res;
                     }
                     if c < col_packed - 1 {
@@ -729,10 +755,7 @@ impl ConstraintSystem {
                             let rc = (k - (k_col - 1)) + c * packed_size;
                             if rc >= mem[output].dim[2] {break};
                             //correct result for rc
-                            let mut res = T::zero();
-                            res += var_dict[mem[extracted].at_idx(&[layer_out,r,c,k]) as usize];
-                            res += var_dict[mem[extracted].at_idx(&[layer_out,r,c + 1,k - packed_size]) as usize];
-
+                            let res = var_dict[mem[extracted].at_idx(&[layer_out,r,c,k]) as usize] + var_dict[mem[extracted].at_idx(&[layer_out,r,c + 1,k - packed_size]) as usize];
                             var_dict[mem[output].at_idx(&[layer_out,r,rc]) as usize] = res;
                         }
                     }

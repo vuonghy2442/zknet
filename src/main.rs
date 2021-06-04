@@ -10,7 +10,7 @@ fn main() {
     let mut memory = network.load_weight::<Scalar>("params/params.pkl");
     let dataset = nn::load_dataset("dataset/test.pkl");
     println!("Done loading!");
-    let result = network.run(&mut memory, &slice_to_scalar(&dataset[0]), true);
+    let result = network.run(&mut memory, &slice_to_scalar(&dataset[0]), false);
     for r in result{
         print!("{:#?} ", r);
     }
