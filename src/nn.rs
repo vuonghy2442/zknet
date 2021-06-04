@@ -20,9 +20,10 @@ fn convolution_layer(c: &mut ConstraintSystem, input: TensorAddress, kernel: [u3
     let (row_out, col_out) = (row - kernel[0] + 1, col - kernel[1] + 1);
     let conv_out = c.mem.alloc(&[feature, row_out, col_out ]);
     let conv_weight = c.mem.alloc(&[feature,c.mem[input].dim[0],kernel[0],kernel[1]]);
+    let conv_weight_rev = c.mem.save(c.mem[conv_weight].reverse(3));
     let bias_scale = if bias_scale == 0 {max(row, col)} else {bias_scale};
     let conv_bias = c.mem.alloc(&[feature, (row_out-1)/bias_scale + 1, (col_out-1)/bias_scale + 1]);
-    c.conv2d_compact(input, conv_out, conv_weight, Some((conv_bias, bias_scale)), max_bits);
+    c.conv2d_compact(input, conv_out, conv_weight_rev, Some((conv_bias, bias_scale)), max_bits + 1);
 
     return (conv_out, conv_weight, conv_bias);
 }
@@ -140,7 +141,7 @@ impl NeuralNetwork {
             res.push(var_dict[c as usize]);
         };
         if verify {
-            // assert!(self.cons.verify(&var_dict));
+            assert!(self.cons.verify(&T::to_big_scalar(&var_dict)));
         }
         res
     }

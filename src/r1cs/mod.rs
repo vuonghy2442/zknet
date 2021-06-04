@@ -40,6 +40,7 @@ pub trait Scalar: Debug + std::ops::Mul<Self, Output=Self> + std::ops::MulAssign
     fn from_i32(x: i32) -> Self;
     fn is_nonneg(&self) -> bool;
     fn to_bytes(&self) -> Vec<u8>;
+    fn to_big_scalar(x: &[Self]) -> Vec<BigScalar>;
 }
 
 const SCALAR_SIZE: u32 = 252;
@@ -70,6 +71,9 @@ impl Scalar for i32 {
         }
         res
     }
+    fn to_big_scalar(x: &[i32]) -> Vec<BigScalar> {
+        return slice_to_scalar(x);
+    }
 }
 
 impl Scalar for BigScalar {
@@ -78,6 +82,9 @@ impl Scalar for BigScalar {
     fn from_i32(x: i32) -> BigScalar { if x < 0 {-BigScalar::from((-x) as u32)} else {BigScalar::from(x as u32)}}
     fn is_nonneg(&self) -> bool { (self.as_bytes()[31] >> 4) == 0 }
     fn to_bytes(&self) -> Vec<u8> {self.to_bytes().to_vec()}
+    fn to_big_scalar(x: &[BigScalar]) -> Vec<BigScalar> {
+        return x.to_vec();
+    }
 }
 
 pub struct MemoryManager {
@@ -547,6 +554,7 @@ impl ConstraintSystem {
 
     pub fn fully_connected(&mut self, input: TensorAddress, output: TensorAddress, weight: TensorAddress, bias: Option<TensorAddress>) {
         for i in 0..self.mem[weight].dim[0] {
+            let weight = self.mem.save(self.mem[weight].at_(&[i]));
             match bias {
                 Some(b) => self.dot(weight,input, self.mem[output].at_idx(&[i]), Some(self.mem[b].at_idx(&[i]))),
                 None => self.dot(weight,input, self.mem[output].at_idx(&[i]), None)
