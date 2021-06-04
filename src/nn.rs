@@ -1,11 +1,10 @@
 use crate::r1cs::ConstraintSystem;
-use crate::r1cs::{TensorAddress, slice_to_scalar};
+use crate::r1cs::{TensorAddress};
 use std::cmp::max;
 use serde_pickle::from_reader;
 use std::fs::File;
 use std::collections::HashMap;
 use crate::r1cs::Scalar;
-use curve25519_dalek::scalar::Scalar as BigScalar;
 
 
 macro_rules! hashmap {
@@ -16,14 +15,14 @@ macro_rules! hashmap {
     }}
 }
 
-fn convolution_layer(c: &mut ConstraintSystem, input: TensorAddress, kernel: [u32;2], feature: u32, bias_scale: u32) -> (TensorAddress, TensorAddress, TensorAddress) {
+fn convolution_layer(c: &mut ConstraintSystem, input: TensorAddress, kernel: [u32;2], feature: u32, bias_scale: u32, max_bits: u8) -> (TensorAddress, TensorAddress, TensorAddress) {
     let (row, col) = (c.mem[input].dim[1], c.mem[input].dim[2]);
     let (row_out, col_out) = (row - kernel[0] + 1, col - kernel[1] + 1);
     let conv_out = c.mem.alloc(&[feature, row_out, col_out ]);
     let conv_weight = c.mem.alloc(&[feature,c.mem[input].dim[0],kernel[0],kernel[1]]);
     let bias_scale = if bias_scale == 0 {max(row, col)} else {bias_scale};
     let conv_bias = c.mem.alloc(&[feature, (row_out-1)/bias_scale + 1, (col_out-1)/bias_scale + 1]);
-    c.conv2d(input, conv_out, conv_weight, Some((conv_bias, bias_scale)));
+    c.conv2d_compact(input, conv_out, conv_weight, Some((conv_bias, bias_scale)), max_bits);
 
     return (conv_out, conv_weight, conv_bias);
 }
@@ -79,12 +78,12 @@ impl NeuralNetwork {
         let mut c = ConstraintSystem::new();
         let input = c.mem.alloc(&[1,28,28]);
         let input_resized = resize(&mut c, input, &[1, 26, 26]);
-        let (conv1_out, conv1_weight, conv1_bias) = convolution_layer(&mut c, input_resized, [5,5], 20, 0);
+        let (conv1_out, conv1_weight, conv1_bias) = convolution_layer(&mut c, input_resized, [5,5], 20, 0, 25);
         let conv1_out_sign = sign_activation(&mut c, conv1_out, 25);
-        let (conv2_out, conv2_weight, conv2_bias) = convolution_layer(&mut c, conv1_out_sign, [3,3], 20, 0);
+        let (conv2_out, conv2_weight, conv2_bias) = convolution_layer(&mut c, conv1_out_sign, [3,3], 20, 0, 9);
         let conv2_out_sign = sign_activation(&mut c, conv2_out, 9);
         let pool1 = max_pool(&mut c, conv2_out_sign);
-        let (conv3_out, conv3_weight, conv3_bias) = convolution_layer(&mut c, pool1, [3,3], 50, 2);
+        let (conv3_out, conv3_weight, conv3_bias) = convolution_layer(&mut c, pool1, [3,3], 50, 2, 11);
         let conv3_out_sign = sign_activation(&mut c, conv3_out, 11);
         let pool2 = max_pool(&mut c, conv3_out_sign);
         let (fc1_out, fc1_weight, fc1_bias) = linear(&mut c, pool2, 500);
