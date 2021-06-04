@@ -774,24 +774,32 @@ impl ConstraintSystem {
             mul_input.push(mul_input_row);
         }
 
+        //packing bias
+        let mut packed_bias: Vec<Vec<TensorAddress>> = Vec::with_capacity(fout as usize);
+        let mut bias_dim = 0;
+        let mut bias_scale = 0;
+        if let Some((b, scale)) = bias {
+            bias_dim = (col - k_col)/packed_size + 1;
+            bias_scale = scale;
+            for layer_out in 0..fout {
+                let mut packed_bias_row: Vec<TensorAddress> = Vec::with_capacity(((row - k_row)/scale + 1) as usize);
+                for r in 0..(row - k_row)/scale + 1 {
+                    let packed_bias = self.mem.alloc(&[bias_dim]);
+                    let bias_row = self.mem.save(self.mem[b].at_(&[layer_out, r]));
+                    self.packing_tensor(bias_row, packed_bias, bit_length, packed_size as u8, scale,power_of_two(bit_length as u32 * (k_col - 1)), true);
+                    packed_bias_row.push(packed_bias);
+                }
+                packed_bias.push(packed_bias_row);
+            }
+        }
+
         let mul_result = self.mem.alloc(&[fout, row - k_row + 1, col_packed]);
         for layer_out in 0..fout {
             let packed_weight = self.mem.save(self.mem[packed_weight].at_(&[layer_out]));
             for r in 0..row - k_row + 1 {
-                // packing bias
-                if let Some((b, scale)) = bias {
-                    let bias_dim = (col - k_col)/packed_size + 1;
-                    let packed_bias = self.mem.alloc(&[bias_dim]);
-                    let bias_row = self.mem.save(self.mem[b].at_(&[layer_out, r]));
-                    self.packing_tensor(bias_row, packed_bias, bit_length, packed_size as u8, scale,power_of_two(bit_length as u32 * (k_col - 1)), true);
-                    for c in 0..col_packed {
-                        let cur_bias = if c < bias_dim {Some(self.mem[packed_bias].at_idx(&[c]))} else {None};
-                        self.dot(mul_input[r as usize][c as usize], packed_weight, self.mem[mul_result].at_idx(&[layer_out, r, c]), cur_bias);
-                    }
-                } else {
-                    for c in 0..col_packed {
-                        self.dot(mul_input[r as usize][c as usize], packed_weight, self.mem[mul_result].at_idx(&[layer_out, r, c]), None);
-                    }
+                for c in 0..col_packed {
+                    let cur_bias = if c < bias_dim {Some(self.mem[packed_bias[layer_out as usize][(r/bias_scale) as usize]].at_idx(&[c]))} else {None};
+                    self.dot(mul_input[r as usize][c as usize], packed_weight, self.mem[mul_result].at_idx(&[layer_out, r, c]), cur_bias);
                 }
             }
         }
@@ -832,7 +840,7 @@ impl ConstraintSystem {
                 }
             }
         }
-        let mut params = vec![mul_result, output, k_col, packed_size, bit_length as u32, extracted];
+        let params = vec![mul_result, output, k_col, packed_size, bit_length as u32, extracted];
         self.compute.push((params.into_boxed_slice(), Functions::ConvCompact));
         self.bit_decomposition(extracted, extracted_bits, extracted_sign, extracted_abs, true);
     }

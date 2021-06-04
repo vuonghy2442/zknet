@@ -154,6 +154,7 @@ impl NeuralNetwork {
         };
         if verify {
             assert!(self.cons.verify(&T::to_big_scalar(&var_dict)));
+            println!("Verified");
         }
         res
     }
