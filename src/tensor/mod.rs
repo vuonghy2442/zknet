@@ -89,6 +89,26 @@ impl VariableTensor {
         }
     }
 
+    pub fn partition(&self, axis: usize, length: u32) -> VariableTensor {
+        assert_eq!(self.dim[axis] % length, 0);
+        let mut dim = Vec::new();
+        let mut step = Vec::new();
+        dim.copy_from_slice(&self.dim[..axis-1]);
+        dim.push(length);
+        dim.push(self.dim[axis]/length);
+        dim.copy_from_slice(&self.dim[axis..]);
+
+        step.copy_from_slice(&self.step[..axis]);
+        step.push(self.step[axis] * length as i32);
+        step.copy_from_slice(&self.step[axis..]);
+
+        VariableTensor {
+            start: self.start,
+            dim: dim.into_boxed_slice(),
+            step: step.into_boxed_slice()
+        }
+    }
+
     pub fn at_idx(&self, idx: &[u32]) -> u32 {
         assert_eq!(self.dim.len(), idx.len());
         let mut res: i32 = self.start as i32;
@@ -172,23 +192,6 @@ impl VariableTensor {
         }
     }
 
-    pub fn squeeze(&self) -> VariableTensor {
-        let start = self.start;
-        let mut dim: Vec<u32> = Vec::with_capacity(self.dim.len());
-        let mut step: Vec<i32> = Vec::with_capacity(self.dim.len());
-        for i in 0..self.dim.len() {
-            if self.dim[i] > 1 {
-                dim.push(self.dim[i]);
-                step.push(self.step[i]);
-            }
-        };
-        VariableTensor {
-            start,
-            dim: dim.into_boxed_slice(),
-            step: step.into_boxed_slice()
-        }
-    }
-
     pub fn begin(&self) -> u32 {
         self.start
     }
@@ -205,9 +208,6 @@ impl VariableTensor {
         }
     }
 
-    pub fn iter_const(var: u32) -> VariableTensorIter {
-        Self::new_const(var).iter()
-    }
 }
 
 

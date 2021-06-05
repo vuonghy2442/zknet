@@ -1,9 +1,7 @@
 
 use crate::tensor::VariableTensor;
 use itertools::izip;
-use crate::tensor::TensorIndex::Id;
-use crate::tensor::TensorIndex::Range;
-use crate::tensor::TensorIndex::RangeFull;
+use crate::tensor::TensorIndex::{Id, Range, RangeFull, RangeTo};
 use std::fmt::Debug;
 use std::ops::{Index};
 use std::cmp::{min, max};
@@ -481,9 +479,7 @@ impl ConstraintSystem {
         let mut iter = self.mem[input].iter();
         loop {
             let x = iter.next();
-            if let None = x {
-                break
-            }
+            if let None = x { break };
             let x = x.unwrap();
             let idx = &iter.idx;
 
@@ -722,6 +718,7 @@ impl ConstraintSystem {
         for _ in 0..packed_size + k_col - 1 {
             big_offset = (big_offset * T::from_i32(2) + T::one()) * offset;
         }
+        let n_packed = packed_size + k_col - 1;
         for layer_out in 0..fout {
             //matching result
             for r in 0..row_out {
@@ -733,7 +730,7 @@ impl ConstraintSystem {
                         ext[(k / bit_length) as usize] += T::from_i32((((val[(k/8) as usize] >> (k % 8)) & 1) as i32) << (k % bit_length));
                     }
                     for k in 0..packed_size + k_col - 1 {
-                        var_dict[mem[extracted].at_idx(&[layer_out,r,c,k]) as usize] = ext[k as usize] - offset;
+                        var_dict[mem[extracted].at_idx(&[layer_out,r,c * n_packed + k]) as usize] = ext[k as usize] - offset;
                     }
                 }
             }
@@ -747,7 +744,7 @@ impl ConstraintSystem {
                         let rc = (k - (k_col - 1)) + c * packed_size;
                         if rc >= mem[output].dim[2] {break};
                         //correct result for rc
-                        let res = var_dict[mem[extracted].at_idx(&[layer_out,r,c,k]) as usize];
+                        let res = var_dict[mem[extracted].at_idx(&[layer_out,r,c * n_packed + k]) as usize];
                         var_dict[mem[output].at_idx(&[layer_out,r,rc]) as usize] = res;
                     }
                     if c < col_packed - 1 {
@@ -755,7 +752,7 @@ impl ConstraintSystem {
                             let rc = (k - (k_col - 1)) + c * packed_size;
                             if rc >= mem[output].dim[2] {break};
                             //correct result for rc
-                            let res = var_dict[mem[extracted].at_idx(&[layer_out,r,c,k]) as usize] + var_dict[mem[extracted].at_idx(&[layer_out,r,c + 1,k - packed_size]) as usize];
+                            let res = var_dict[mem[extracted].at_idx(&[layer_out,r,c * n_packed + k]) as usize] + var_dict[mem[extracted].at_idx(&[layer_out,r,(c + 1) * n_packed + k - packed_size]) as usize];
                             var_dict[mem[output].at_idx(&[layer_out,r,rc]) as usize] = res;
                         }
                     }
@@ -827,12 +824,18 @@ impl ConstraintSystem {
             }
         }
 
-        //sign extraction
+        // sign extraction
+        // let fully_packed = self.mem[output].dim[3]/packed_size*packed_size;
+        // let output_full = self.mem.save(self.mem[output].at(&[RangeFull(), RangeFull(), RangeTo(..fully_packed)]).partition(2, packed_size));
+        // let output_full_correct = self.mem.save(self.mem[output_full].at(&[RangeFull(), RangeFull(), RangeFull(),RangeTo(..packed_size-k_col+1)]));
+
+
         let n_packed = packed_size + k_col - 1;
-        let extracted = self.mem.alloc(&[fout, row - k_row + 1, col_packed, n_packed]);
-        let extracted_bits = self.mem.alloc(&[fout, row - k_row + 1, col_packed, n_packed, bit_length as u32 - 1]);
-        let extracted_sign = self.mem.alloc(&[fout, row - k_row + 1, col_packed, n_packed]);
-        let extracted_abs = self.mem.alloc(&[fout, row - k_row + 1, col_packed, n_packed]);
+        let extracted_length = (col_packed - 1) * n_packed + ((col-1) % packed_size) + k_col;
+        let extracted = self.mem.alloc(&[fout, row - k_row + 1, extracted_length]);
+        let extracted_bits = self.mem.alloc(&[fout, row - k_row + 1, extracted_length, bit_length as u32 - 1]);
+        let extracted_sign = self.mem.alloc(&[fout, row - k_row + 1, extracted_length]);
+        let extracted_abs = self.mem.alloc(&[fout, row - k_row + 1, extracted_length]);
 
         self.packing_tensor(extracted, mul_result, bit_length, n_packed as u8,1,BigScalar::one(), false);
 
@@ -844,7 +847,7 @@ impl ConstraintSystem {
                         let rc = (k - (k_col - 1)) + c * packed_size;
                         if rc >= col - k_col + 1 {break};
                         //correct result for rc
-                        self.a.push((self.n_cons, self.mem[extracted].at_idx(&[layer_out,r,c,k]), Scalar::one()));
+                        self.a.push((self.n_cons, self.mem[extracted].at_idx(&[layer_out,r,c * n_packed + k]), Scalar::one()));
                         self.b.push((self.n_cons, self.mem.one_var, Scalar::one()));
                         self.c.push((self.n_cons, self.mem[output].at_idx(&[layer_out,r,rc]), Scalar::one()));
                         self.n_cons += 1;
@@ -853,8 +856,8 @@ impl ConstraintSystem {
                         for k in packed_size..packed_size + k_col - 1 {
                             let rc = (k - (k_col - 1)) + c * packed_size;
                             if rc >= col - k_col + 1 {break};
-                            self.a.push((self.n_cons, self.mem[extracted].at_idx(&[layer_out,r,c,k]), Scalar::one()));
-                            self.a.push((self.n_cons, self.mem[extracted].at_idx(&[layer_out,r,c+1,k - packed_size]), Scalar::one()));
+                            self.a.push((self.n_cons, self.mem[extracted].at_idx(&[layer_out,r,c * n_packed + k]), Scalar::one()));
+                            self.a.push((self.n_cons, self.mem[extracted].at_idx(&[layer_out,r,(c+1) * n_packed + k - packed_size]), Scalar::one()));
                             self.b.push((self.n_cons, self.mem.one_var, Scalar::one()));
                             self.c.push((self.n_cons, self.mem[output].at_idx(&[layer_out,r,rc]), Scalar::one()));
                             self.n_cons += 1;
@@ -875,8 +878,6 @@ struct PoseidonHash {
 
 #[cfg(test)]
 mod tests {
-    use core::slice;
-
     use super::*;
 
     #[test]
