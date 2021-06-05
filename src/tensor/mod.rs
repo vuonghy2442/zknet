@@ -63,14 +63,6 @@ impl VariableTensor {
         }
     }
 
-    pub fn new_const(var: u32) -> VariableTensor {
-        VariableTensor {
-            start: var,
-            dim: {Box::new([u32::MAX])},
-            step: {Box::new([0])}
-        }
-    }
-
     pub fn size(&self) -> u32 {
         let mut s = 1u32;
         for d in self.dim.iter() {

@@ -4,7 +4,7 @@ use std::cmp::max;
 use serde_pickle::from_reader;
 use std::fs::File;
 use std::collections::HashMap;
-use crate::r1cs::Scalar;
+use crate::scalar::Scalar;
 
 
 macro_rules! hashmap {

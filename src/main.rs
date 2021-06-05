@@ -2,7 +2,11 @@ mod tensor;
 mod r1cs;
 mod nn;
 mod zk;
-use r1cs::{slice_to_scalar, to_vec_i32};
+mod scalar;
+use std::io;
+use std::io::Write;
+
+use crate::scalar::{slice_to_scalar, to_vec_i32};
 use curve25519_dalek::scalar::Scalar;
 
 fn softmax(x: &mut [f64]) {
@@ -19,8 +23,12 @@ fn main() {
     let network = nn::NeuralNetwork::new();
     let mut memory = network.load_weight::<Scalar>("params/params.pkl");
     let dataset = nn::load_dataset("dataset/test.pkl");
-    println!("Done loading!");
-    let result = to_vec_i32(&network.run(&mut memory, &slice_to_scalar(&dataset[1]), false));
+    print!("Done loading! Enter sample id: ");
+    io::stdout().flush().unwrap();
+    let mut x: String = String::new();
+    io::stdin().read_line(&mut x).expect("Failed to get console input");
+    let x = x.trim().parse::<usize>().expect("Failed to parse int");
+    let result = to_vec_i32(&network.run(&mut memory, &slice_to_scalar(&dataset[x]), false));
     let mut prob = Vec::new();
     for r in result{
         prob.push(r as f64/ 2u32.pow(20) as f64);
@@ -29,7 +37,15 @@ fn main() {
     for (i,r) in prob.iter().enumerate() {
         println!("Prob {}: {}", i, r);
     }
-    println!("");
 
-    // zk::prove_nizk(network, &memory);
+    print!("Proof type (nizk/snark/none): ");
+    io::stdout().flush().unwrap();
+    let mut x: String = String::new();
+    io::stdin().read_line(&mut x).expect("Failed to get console input");
+    match x.as_str() {
+        "nizk" => zk::prove_nizk(network, &memory),
+        "snark" => zk::prove_zk_snark(network, &memory),
+        _ => {}
+    }
+
 }
