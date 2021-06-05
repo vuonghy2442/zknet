@@ -63,10 +63,8 @@ pub fn to_vec_i32<T: Scalar>(x: &[T]) -> Vec<i32> {
     let mut res = Vec::new();
     for &i in x {
         let val = i.to_i32();
-        print!("{} ", val);
         res.push(val);
     }
-    println!("");
     res
 }
 
