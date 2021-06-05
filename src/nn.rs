@@ -15,7 +15,7 @@ macro_rules! hashmap {
     }}
 }
 
-fn convolution_layer_compact(c: &mut ConstraintSystem, input: TensorAddress, kernel: [u32;2], feature: u32, bias_scale: u32, max_bits: u8) -> (TensorAddress, TensorAddress, TensorAddress) {
+fn convolution_layer_sign_compact(c: &mut ConstraintSystem, input: TensorAddress, kernel: [u32;2], feature: u32, bias_scale: u32, max_bits: u8) -> (TensorAddress, TensorAddress, TensorAddress) {
     let (row, col) = (c.mem[input].dim[1], c.mem[input].dim[2]);
     let (row_out, col_out) = (row - kernel[0] + 1, col - kernel[1] + 1);
     let conv_out = c.mem.alloc(&[feature, row_out, col_out ]);
@@ -93,11 +93,9 @@ impl NeuralNetwork {
         let input_resized = resize(&mut c, input, &[1, 26, 26]);
         let (conv1_out, conv1_weight, conv1_bias) = convolution_layer(&mut c, input_resized, [5,5], 20, 0);
         let conv1_out_sign = sign_activation(&mut c, conv1_out, 25);
-        let (conv2_out, conv2_weight, conv2_bias) = convolution_layer_compact(&mut c, conv1_out_sign, [3,3], 20, 0, 9);
-        let conv2_out_sign = sign_activation(&mut c, conv2_out, 9);
+        let (conv2_out_sign, conv2_weight, conv2_bias) = convolution_layer_sign_compact(&mut c, conv1_out_sign, [3,3], 20, 0, 9);
         let pool1 = max_pool(&mut c, conv2_out_sign);
-        let (conv3_out, conv3_weight, conv3_bias) = convolution_layer_compact(&mut c, pool1, [3,3], 50, 2, 11);
-        let conv3_out_sign = sign_activation(&mut c, conv3_out, 11);
+        let (conv3_out_sign, conv3_weight, conv3_bias) = convolution_layer_sign_compact(&mut c, pool1, [3,3], 50, 2, 11);
         let pool2 = max_pool(&mut c, conv3_out_sign);
         let (fc1_out, fc1_weight, fc1_bias) = linear(&mut c, pool2, 500);
         let relu_out = relu_activation(&mut c, fc1_out, 11);

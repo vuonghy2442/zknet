@@ -90,17 +90,17 @@ impl VariableTensor {
     }
 
     pub fn partition(&self, axis: usize, length: u32) -> VariableTensor {
-        assert_eq!(self.dim[axis] % length, 0);
+        // assert_eq!(self.dim[axis] % length, 0);
         let mut dim = Vec::new();
         let mut step = Vec::new();
-        dim.copy_from_slice(&self.dim[..axis-1]);
+        dim.extend_from_slice(&self.dim[..axis]);
+        dim.push((self.dim[axis] - 1)/length + 1);
         dim.push(length);
-        dim.push(self.dim[axis]/length);
-        dim.copy_from_slice(&self.dim[axis..]);
+        dim.extend_from_slice(&self.dim[axis + 1..]);
 
-        step.copy_from_slice(&self.step[..axis]);
+        step.extend_from_slice(&self.step[..axis]);
         step.push(self.step[axis] * length as i32);
-        step.copy_from_slice(&self.step[axis..]);
+        step.extend_from_slice(&self.step[axis..]);
 
         VariableTensor {
             start: self.start,

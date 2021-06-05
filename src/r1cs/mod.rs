@@ -1,7 +1,7 @@
 
-use crate::tensor::VariableTensor;
+use crate::tensor::{VariableTensor};
 use itertools::izip;
-use crate::tensor::TensorIndex::{Id, Range, RangeFull, RangeTo};
+use crate::tensor::TensorIndex::{Id, Range, RangeFull, RangeTo, RangeFrom};
 use std::fmt::Debug;
 use std::ops::{Index};
 use std::cmp::{min, max};
@@ -29,7 +29,7 @@ pub type TensorAddress = u32;
 type Memory<T> = [T];
 
 pub trait Functional: Sized {
-    const FUNCTIONS: [fn(mem: &MemoryManager, &[u32], &mut [Self]); 7];
+    const FUNCTIONS: [fn(mem: &MemoryManager, &[u32], &mut [Self]); 8];
 }
 
 pub trait Scalar: Debug + std::ops::Mul<Self, Output=Self> + std::ops::MulAssign<Self> + std::ops::Add<Self, Output=Self> + std::ops::AddAssign<Self> + std::ops::Sub<Self, Output=Self> + std::ops::Neg<Output=Self> + std::cmp::Eq + Functional + Clone + Copy {
@@ -79,14 +79,15 @@ fn power_of_two(x: u32) -> BigScalar {
 const SCALAR_SIZE: u32 = 252;
 
 impl<T:Scalar> Functional for T {
-    const FUNCTIONS: [fn(mem: &MemoryManager, &[u32], &mut [T]); 7] = [
+    const FUNCTIONS: [fn(mem: &MemoryManager, &[u32], &mut [T]); 8] = [
         ConstraintSystem::run_sum::<T>,
         ConstraintSystem::run_mul::<T>,
         ConstraintSystem::run_decompose::<T>,
         ConstraintSystem::run_relu::<T>,
         ConstraintSystem::run_max_pool::<T>,
         ConstraintSystem::run_packing_tensor::<T>,
-        ConstraintSystem::run_conv2d_compact::<T>
+        ConstraintSystem::run_conv2d_compact::<T>,
+        ConstraintSystem::run_sum_two::<T>
     ];
 }
 
@@ -215,7 +216,8 @@ enum Functions {
     Relu = 3,
     MaxPool = 4,
     Packing = 5,
-    ConvCompact = 6
+    ConvCompact = 6,
+    SumTwo = 7
 }
 
 impl ConstraintSystem {
@@ -381,6 +383,25 @@ impl ConstraintSystem {
         self.compute.push((Box::new([a, b, res]), Functions::Mul));
     }
 
+    fn run_sum_two<T: Scalar>(mem: &MemoryManager, param: &[u32], var_dict: &mut Memory<T>) {
+        let (a, b, res) = (param[0], param[1], param[2]);
+        for (x, y, z) in izip!(mem[a].iter(), mem[b].iter(), mem[res].iter()) {
+            var_dict[z as usize] = var_dict[x as usize] + var_dict[y as usize];
+        }
+    }
+
+    pub fn sum_two(&mut self, a: TensorAddress, b: TensorAddress, res: TensorAddress) {
+        for (x, y, z) in izip!(self.mem[a].iter(), self.mem[b].iter(), self.mem[res].iter()) {
+            self.a.push((self.n_cons, x, Scalar::one()));
+            self.a.push((self.n_cons, y, Scalar::one()));
+            self.b.push((self.n_cons, self.mem.one_var, Scalar::one()));
+            self.c.push((self.n_cons, z, Scalar::one()));
+            self.n_cons += 1;
+        }
+
+        self.compute.push((Box::new([a, b, res]), Functions::SumTwo));
+    }
+
     fn run_sum<T: Scalar>(mem: &MemoryManager, param: &[u32], var_dict: &mut Memory<T>) {
         let mut res: T = if param.len() == 3 {var_dict[param[2] as usize]} else {T::zero()};
         for x in mem[param[0]].iter() {
@@ -416,7 +437,6 @@ impl ConstraintSystem {
 
     pub fn conv2d(&mut self, input: TensorAddress, output: TensorAddress, weight: TensorAddress, bias: Option<(TensorAddress, u32)>) {
         let fout = self.mem[weight].dim[0];
-        let fin = self.mem[weight].dim[1];
         let kx = self.mem[weight].dim[2];
         let ky = self.mem[weight].dim[3];
         let (out_row, out_col) = (self.mem[input].dim[1] - kx + 1, self.mem[input].dim[2] - ky + 1);
@@ -707,7 +727,7 @@ impl ConstraintSystem {
     }
 
     pub fn run_conv2d_compact<T: Scalar>(mem: &MemoryManager, param: &[u32], var_dict: &mut Memory<T>) {
-        let (mul_result, output,k_col, packed_size,bit_length,extracted) = (param[0], param[1], param[2], param[3], param[4], param[5]);
+        let (mul_result, k_col, packed_size,bit_length,extracted) = (param[0], param[1], param[2], param[3], param[4]);
         let (fout, row_out, col_packed) = (mem[mul_result].dim[0],mem[mul_result].dim[1],mem[mul_result].dim[2]);
 
         let mut offset = T::one();
@@ -731,30 +751,6 @@ impl ConstraintSystem {
                     }
                     for k in 0..packed_size + k_col - 1 {
                         var_dict[mem[extracted].at_idx(&[layer_out,r,c * n_packed + k]) as usize] = ext[k as usize] - offset;
-                    }
-                }
-            }
-        }
-
-        for layer_out in 0..fout {
-            //matching result
-            for r in 0..row_out {
-                for c in 0..col_packed {
-                    for k in k_col - 1..packed_size {
-                        let rc = (k - (k_col - 1)) + c * packed_size;
-                        if rc >= mem[output].dim[2] {break};
-                        //correct result for rc
-                        let res = var_dict[mem[extracted].at_idx(&[layer_out,r,c * n_packed + k]) as usize];
-                        var_dict[mem[output].at_idx(&[layer_out,r,rc]) as usize] = res;
-                    }
-                    if c < col_packed - 1 {
-                        for k in packed_size..packed_size + k_col - 1 {
-                            let rc = (k - (k_col - 1)) + c * packed_size;
-                            if rc >= mem[output].dim[2] {break};
-                            //correct result for rc
-                            let res = var_dict[mem[extracted].at_idx(&[layer_out,r,c * n_packed + k]) as usize] + var_dict[mem[extracted].at_idx(&[layer_out,r,(c + 1) * n_packed + k - packed_size]) as usize];
-                            var_dict[mem[output].at_idx(&[layer_out,r,rc]) as usize] = res;
-                        }
                     }
                 }
             }
@@ -825,50 +821,97 @@ impl ConstraintSystem {
         }
 
         // sign extraction
-        // let fully_packed = self.mem[output].dim[3]/packed_size*packed_size;
-        // let output_full = self.mem.save(self.mem[output].at(&[RangeFull(), RangeFull(), RangeTo(..fully_packed)]).partition(2, packed_size));
-        // let output_full_correct = self.mem.save(self.mem[output_full].at(&[RangeFull(), RangeFull(), RangeFull(),RangeTo(..packed_size-k_col+1)]));
-
-
         let n_packed = packed_size + k_col - 1;
         let extracted_length = (col_packed - 1) * n_packed + ((col-1) % packed_size) + k_col;
         let extracted = self.mem.alloc(&[fout, row - k_row + 1, extracted_length]);
-        let extracted_bits = self.mem.alloc(&[fout, row - k_row + 1, extracted_length, bit_length as u32 - 1]);
-        let extracted_sign = self.mem.alloc(&[fout, row - k_row + 1, extracted_length]);
-        let extracted_abs = self.mem.alloc(&[fout, row - k_row + 1, extracted_length]);
 
         self.packing_tensor(extracted, mul_result, bit_length, n_packed as u8,1,BigScalar::one(), false);
 
-        for layer_out in 0..fout {
-            //matching result
-            for r in 0..row - k_row + 1 {
-                for c in 0..col_packed {
-                    for k in k_col - 1..packed_size {
-                        let rc = (k - (k_col - 1)) + c * packed_size;
-                        if rc >= col - k_col + 1 {break};
-                        //correct result for rc
-                        self.a.push((self.n_cons, self.mem[extracted].at_idx(&[layer_out,r,c * n_packed + k]), Scalar::one()));
-                        self.b.push((self.n_cons, self.mem.one_var, Scalar::one()));
-                        self.c.push((self.n_cons, self.mem[output].at_idx(&[layer_out,r,rc]), Scalar::one()));
-                        self.n_cons += 1;
-                    }
-                    if c < col_packed - 1 {
-                        for k in packed_size..packed_size + k_col - 1 {
-                            let rc = (k - (k_col - 1)) + c * packed_size;
-                            if rc >= col - k_col + 1 {break};
-                            self.a.push((self.n_cons, self.mem[extracted].at_idx(&[layer_out,r,c * n_packed + k]), Scalar::one()));
-                            self.a.push((self.n_cons, self.mem[extracted].at_idx(&[layer_out,r,(c+1) * n_packed + k - packed_size]), Scalar::one()));
-                            self.b.push((self.n_cons, self.mem.one_var, Scalar::one()));
-                            self.c.push((self.n_cons, self.mem[output].at_idx(&[layer_out,r,rc]), Scalar::one()));
-                            self.n_cons += 1;
-                        }
-                    }
+        let params = vec![mul_result, k_col, packed_size, bit_length as u32, extracted];
+        self.compute.push((params.into_boxed_slice(), Functions::ConvCompact));
+
+        fn split_tensor<const N:usize>(mem: &mut MemoryManager,tensor: TensorAddress, length: u32, pos: [u32; N]) -> [(Option<TensorAddress>, Option<TensorAddress>); N] {
+            let fully_packed = mem[tensor].dim[2]/length;
+            let remainder = mem[tensor].dim[2] % length;
+
+            // should not save this
+            let tmp=mem[tensor].partition(2, length);
+
+            let mut res: [(Option<TensorAddress>, Option<TensorAddress>); N] = [(None, None); N];
+            for i in 0..N - 1 {
+                let n= fully_packed + if remainder >= pos[i+1] {1} else {0};
+                let full = if n > 0 {
+                    Some(mem.save(tmp.at(&[RangeFull(), RangeFull(), RangeTo(..n), Range(pos[i]..pos[i+1])])))
+                } else {
+                    None
+                };
+                let rem = if pos[i] < remainder && remainder < pos[i+1] {
+                    Some(mem.save(tmp.at(&[RangeFull(), RangeFull(), Id(n), Range(pos[i]..remainder)])))
+                } else {
+                    None
+                };
+                res[i] = (full, rem);
+            }
+            res
+        }
+
+
+        fn extract_sign_part(c: &mut ConstraintSystem, extracted: TensorAddress, bit_length: u8) {
+            let output = c.mem.alloc(&c.mem[extracted].dim.to_owned());
+            c.sign(extracted, output, bit_length - 1);
+        }
+
+        let [(output_full, output_full_rem), (output_part, output_part_rem), (_,_)]= split_tensor(&mut self.mem, output, packed_size, [0, packed_size-(k_col-1), packed_size]);
+        let [(ext_left, ext_left_rem), (ext_full, ext_full_rem), (ext_right,ext_right_rem), (_,_)]= split_tensor(&mut self.mem, extracted, n_packed, [0, k_col-1, packed_size, n_packed]);
+
+        // extract the fully correct part
+        if let Some(e) = ext_full {
+            self.sign(e, output_full.unwrap(), bit_length - 1);
+        }
+
+        if let Some(e) = ext_full_rem {
+            self.sign(e, output_full_rem.unwrap(), bit_length - 1);
+        }
+
+        //extract left and right sign part
+        if let Some(e) = ext_left {
+            extract_sign_part(self,e, bit_length);
+        }
+
+        if let Some(e) = ext_left_rem {
+            extract_sign_part(self,e, bit_length);
+        }
+
+        if let Some(e) = ext_right {
+            extract_sign_part(self,e, bit_length);
+        }
+
+        if let Some(e) = ext_right_rem {
+            extract_sign_part(self,e, bit_length);
+        }
+
+        if let Some(left_rem) = ext_left_rem {
+            if let Some(right) = ext_right {
+                let sum_res = self.mem.alloc(&[fout, row - k_row + 1, self.mem[right].dim[2] - 1, k_col - 1]);
+                let left = self.mem.save(self.mem[ext_left.unwrap()].at(&[RangeFull(), RangeFull(), RangeFrom(1..)]));
+                self.sum_two(right, left, sum_res);
+                self.sign(sum_res, output_part.unwrap(), bit_length - 1);
+
+                let sum_res = self.mem.alloc(&[fout, row - k_row + 1, left_rem]);
+                let right_last = self.mem.save(self.mem[right].at(&[RangeFull(), RangeFull(), Id(self.mem[right].dim[2] - 1)]));
+                self.sum_two(right_last, left_rem, sum_res);
+                self.sign(sum_res, output_part_rem.unwrap(), bit_length - 1);
+            }
+        } else if let Some(right) = ext_right {
+            if let Some(left) = ext_left {
+                if self.mem[right].dim[2] + 1 == self.mem[left].dim[2] {
+                    let sum_res = self.mem.alloc(&[fout, row - k_row + 1, self.mem[right].dim[2], k_col - 1]);
+                    let left = self.mem.save(self.mem[ext_left.unwrap()].at(&[RangeFull(), RangeFull(), RangeFrom(1..)]));
+                    self.sum_two(right, left, sum_res);
+                    self.sign(sum_res, output_part.unwrap(), bit_length - 1);
                 }
             }
         }
-        let params = vec![mul_result, output, k_col, packed_size, bit_length as u32, extracted];
-        self.compute.push((params.into_boxed_slice(), Functions::ConvCompact));
-        self.bit_decomposition(extracted, extracted_bits, extracted_sign, extracted_abs, true);
     }
 }
 
@@ -978,7 +1021,7 @@ mod tests {
         mem.resize(x.mem.n_var as usize, Scalar::zero());
 
         x.compute(&mut mem);
-        assert_eq!(mem[87..87+18], slice_to_scalar(&[32,3,-36,-27,-9,59,44,-21,-16,-23,25,-4,-24,-8,21,-15,-33,-1]));
+        assert_eq!(mem[87..87+18], slice_to_scalar(&[1,1,-1,-1,-1,1,1,-1,-1,-1,1,-1,-1,-1,1,-1,-1,-1]));
         x.sort_cons();
         assert!(x.verify(&mem));
     }
@@ -999,7 +1042,7 @@ mod tests {
         x.load_memory(weight, &mut mem, &slice_to_scalar(&[1,1,-1, 1,-1,1, 1,1,1]));
 
         x.compute(&mut mem);
-        assert_eq!(mem[x.mem[output].begin() as usize..x.mem[output].end() as usize], slice_to_scalar(&[3,7]));
+        assert_eq!(mem[x.mem[output].begin() as usize..x.mem[output].end() as usize], slice_to_scalar(&[1,1]));
         x.sort_cons();
         assert!(x.verify(&mem));
     }
