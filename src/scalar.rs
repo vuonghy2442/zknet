@@ -71,10 +71,10 @@ pub fn to_vec_i32<T: Scalar>(x: &[T]) -> Vec<i32> {
     res
 }
 
-pub fn power_of_two(x: u32) -> BigScalar {
+pub fn power_of_two<T : Scalar>(x: u32) -> T {
     let mut t = [0u8;32];
     t[(x/8) as usize] = 1u8 << (x%8);
-    BigScalar::from_bits(t)
+    T::from_bytes(t)
 }
 
 pub const SCALAR_SIZE: u32 = 252;

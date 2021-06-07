@@ -219,7 +219,7 @@ impl ConstraintSystem {
             if sa * sb != sc {
                 println!("Constraint {}", i);
                 println!("{} {} {}", self.a[ai-1].1, self.b[bi-1].1, self.c[ci-1].1);
-                println!("{} {} {}", sa.as_bytes()[0], sb.as_bytes()[0], sc.as_bytes()[0]);
+                println!("{} {} {}", sa.to_i32(), sb.to_i32(), sc.to_i32());
                 return false;
             }
         }
@@ -347,7 +347,7 @@ impl ConstraintSystem {
     }
 
     fn run_decompose<T: Scalar>(mem: &MemoryManager, param: &[u32], var_dict: &mut Memory<T>) {
-        let (input, output, sign, abs) = (param[0], param[1], param[2], param[3]);
+        let (input, output, sign, two_complement) = (param[0], param[1], param[2], param[3]);
         let mut iter = mem[input].iter();
         loop {
             let x = iter.next();
@@ -357,15 +357,16 @@ impl ConstraintSystem {
             let x = var_dict[x.unwrap() as usize];
             let idx = &iter.idx;
             let bits = mem[output].at_(idx);
+            let bits_cnt = bits.size();
             let sign = mem[sign].at_idx(idx);
-            let abs = mem[abs].at_idx(idx);
+            let two_complement = mem[two_complement].at_idx(idx);
 
             let positive = x.is_nonneg();
 
             var_dict[sign as usize] = if positive {T::one()} else {-T::one()};
-            var_dict[abs as usize] = if positive {x} else {-x};
+            var_dict[two_complement as usize] = if positive {x} else {power_of_two::<T>(bits_cnt) + x};
 
-            let data = var_dict[abs as usize].to_bytes();
+            let data = var_dict[two_complement as usize].to_bytes();
             for (i, bit) in bits.iter().enumerate() {
                 var_dict[bit as usize] = T::from_i32(((data[i/8] >> (i%8)) & 1) as i32);
             }
@@ -373,7 +374,7 @@ impl ConstraintSystem {
     }
 
     // input should have shape with sign, abs, and output should have one more dimension with length bit size
-    pub fn bit_decomposition(&mut self, input: TensorAddress, output: TensorAddress, sign: TensorAddress, abs: TensorAddress, compute: bool) {
+    pub fn bit_decomposition(&mut self, input: TensorAddress, output: TensorAddress, sign: TensorAddress, two_complement: TensorAddress, compute: bool) {
         let mut iter = self.mem[input].iter();
         loop {
             let x = iter.next();
@@ -382,12 +383,15 @@ impl ConstraintSystem {
             let idx = &iter.idx;
 
             let bits = self.mem[output].at_(idx);
-            let abs = self.mem[abs].at_idx(idx);
+            let bits_cnt = bits.size();
+            let two_complement = self.mem[two_complement].at_idx(idx); //abs(2x+1)
             let sign = self.mem[sign].at_idx(idx);
-            // abs * sign == input
-            self.a.push((self.n_cons, abs, Scalar::one()));
-            self.b.push((self.n_cons, sign, Scalar::one()));
-            self.c.push((self.n_cons, x, Scalar::one()));
+            // two_comp + x = 2^bits when sign = -1 and = 0 when sign = 1
+            self.a.push((self.n_cons, two_complement, BigScalar::one()));
+            self.a.push((self.n_cons, x, -BigScalar::one()));
+            self.b.push((self.n_cons, self.mem.one_var, BigScalar::one()));
+            self.c.push((self.n_cons, sign, -power_of_two::<BigScalar>(bits_cnt - 1)));
+            self.c.push((self.n_cons, self.mem.one_var, power_of_two(bits_cnt - 1)));
             self.n_cons += 1;
 
             // sign only = +-1 <=> sign^2 == 1
@@ -399,7 +403,7 @@ impl ConstraintSystem {
             let sum_cons = self.n_cons;
             self.n_cons += 1;
             self.b.push((sum_cons, self.mem.one_var, BigScalar::one()));
-            self.c.push((sum_cons, abs, BigScalar::one()));
+            self.c.push((sum_cons, two_complement, BigScalar::one()));
 
 
             let mut pow: u32 = 1;
@@ -416,7 +420,7 @@ impl ConstraintSystem {
         }
 
         if compute {
-            let params = Box::new([input, output, sign, abs]);
+            let params = Box::new([input, output, sign, two_complement]);
             self.compute.push((params, Functions::Decompose));
         }
     }
@@ -424,10 +428,10 @@ impl ConstraintSystem {
     pub fn sign(&mut self, input: TensorAddress, output: TensorAddress, max_bits: u8) {
         let mut dim = self.mem[input].dim.to_vec();
 
-        let abs = self.mem.alloc(&dim);
+        let two_complement = self.mem.alloc(&dim);
         dim.push(max_bits as u32);
         let bits = self.mem.alloc(&dim);
-        self.bit_decomposition(input, bits, output, abs, true);
+        self.bit_decomposition(input, bits, output, two_complement, true);
     }
 
     fn run_relu<T: Scalar>(mem: &MemoryManager, param: &[u32], var_dict: &mut Memory<T>) {
@@ -439,16 +443,17 @@ impl ConstraintSystem {
 
     pub fn relu(&mut self, input: TensorAddress, output: TensorAddress, max_bits: u8) {
         let mut dim = self.mem[input].dim.to_vec();
-        let abs = self.mem.alloc(&dim);
+        let two_complement = self.mem.alloc(&dim);
         let sign = self.mem.alloc(&dim);
         dim.push(max_bits as u32);
         let bits = self.mem.alloc(&dim);
-        self.bit_decomposition(input, bits, sign, abs, true);
+        self.bit_decomposition(input, bits, sign, two_complement, true);
 
-        for (abs, input, output) in izip!(self.mem[abs].iter(), self.mem[input].iter(), self.mem[output].iter()) {
+        for (sign, input, output) in izip!(self.mem[sign].iter(), self.mem[input].iter(), self.mem[output].iter()) {
             self.a.push((self.n_cons, input, BigScalar::one()));
-            self.a.push((self.n_cons, abs, BigScalar::one()));
-            self.a.push((self.n_cons, output, BigScalar::from(2u32)));
+            self.b.push((self.n_cons, sign, BigScalar::one()));
+            self.b.push((self.n_cons, self.mem.one_var, BigScalar::one()));
+            self.c.push((self.n_cons, output, BigScalar::from(2u32)));
             self.n_cons += 1;
         }
 
