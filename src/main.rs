@@ -28,7 +28,14 @@ fn main() {
     let mut x: String = String::new();
     io::stdin().read_line(&mut x).expect("Failed to get console input");
     let x = x.trim().parse::<usize>().expect("Failed to parse int");
-    let result = to_vec_i32(&network.run(&mut memory, &slice_to_scalar(&dataset[x]), false));
+    let (result, hash) = network.run(&mut memory, &slice_to_scalar(&dataset[x]), true);
+    println!("Hash value:");
+    for r in hash {
+        println!("{:#?}", r);
+    }
+    println!("Predicted result:");
+
+    let result = to_vec_i32(&result);
     let mut prob = Vec::new();
     for r in result{
         prob.push(r as f64/ 2u32.pow(20) as f64);
@@ -42,7 +49,8 @@ fn main() {
     io::stdout().flush().unwrap();
     let mut x: String = String::new();
     io::stdin().read_line(&mut x).expect("Failed to get console input");
-    match x.as_str() {
+
+    match x.trim(){
         "nizk" => zk::prove_nizk(network, &memory),
         "snark" => zk::prove_zk_snark(network, &memory),
         _ => {}

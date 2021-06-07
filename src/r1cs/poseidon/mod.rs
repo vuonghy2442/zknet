@@ -3,7 +3,7 @@ use std::usize;
 
 use crate::{r1cs::{ConstraintSystem, Functions, Memory, MemoryManager, Range, RangeTo, TensorAddress, ScalarAddress}, tensor::{VariableTensor, VariableTensorListIter}};
 use curve25519_dalek::scalar::Scalar as BigScalar;
-use crate::scalar::{from_hex, Scalar, slice_to_scalar};
+use crate::scalar::{from_hex, Scalar};
 
 mod constant;
 
@@ -246,8 +246,8 @@ impl ConstraintSystem {
     }
 
     pub fn run_poseidon_hash<T: Scalar>(mem: &MemoryManager, param: &[u32], var_dict: &mut Memory<T>) {
-        if let [output, input_added, temp_res, temp_val] = param[..4] {
-            let input = &param[4..];
+        if let [input_added, temp_res, temp_val,output,output_rem] = param[..5] {
+            let input = &param[5..];
             let mut input_tensor = Vec::new();
             let mut size = 0;
             for &i in input {
@@ -282,7 +282,14 @@ impl ConstraintSystem {
                     }
                 }
                 let next_state = if i == step - 1 {
-                    mem[output].iter().collect::<Vec<u32>>()
+                    let mut output_mem = Vec::new();
+                    for i in mem[output].iter() {
+                        output_mem.push(i);
+                    }
+                    for i in mem[output_rem].iter() {
+                        output_mem.push(i);
+                    }
+                    output_mem
                 } else {
                     mem[temp_res].at_(&[i]).iter().collect::<Vec<u32>>()
                 };
@@ -293,7 +300,7 @@ impl ConstraintSystem {
         }
     }
 
-    pub fn poseidon_hash(&mut self, input: &[TensorAddress], output: TensorAddress) {
+    pub fn poseidon_hash(&mut self, input: &[TensorAddress]) -> TensorAddress {
         let mut input_tensor = Vec::new();
         let mut size = 0;
         for &i in input {
@@ -305,6 +312,8 @@ impl ConstraintSystem {
         let input_added = self.mem.alloc(&[step - 1, constant::RATE as u32]);
         let temp_res = self.mem.alloc(&[step - 1, constant::T as u32]);
         let temp_val = self.mem.alloc(&[step, constant::TEMP_SIZE as u32]);
+        let output = self.mem.alloc(&[constant::RATE as u32]);
+        let output_rem = self.mem.alloc(&[(constant::T - constant::RATE) as u32]);
 
         let mut it = VariableTensorListIter::from_tensor_list(&input_tensor);
         let mut state = Vec::new();
@@ -335,23 +344,52 @@ impl ConstraintSystem {
                 }
             }
             let next_state = if i == step - 1 {
-                self.mem[output].iter().collect::<Vec<u32>>()
+                let mut output_mem = Vec::new();
+                for i in self.mem[output].iter() {
+                    output_mem.push(i);
+                }
+                for i in self.mem[output_rem].iter() {
+                    output_mem.push(i);
+                }
+                output_mem
             } else {
                 self.mem[temp_res].at_(&[i]).iter().collect::<Vec<u32>>()
             };
             self.added_poseidon_perm_box(&state, &next_state, self.mem[temp_val].at_(&[i]));
         }
         let mut params = Vec::new();
-        params.extend_from_slice(&[output, input_added, temp_res, temp_val]);
+        params.extend_from_slice(&[input_added, temp_res, temp_val, output, output_rem]);
         params.extend_from_slice(input);
 
-        self.compute.push((params.into_boxed_slice(), Functions::PoseidonHash))
+        self.compute.push((params.into_boxed_slice(), Functions::PoseidonHash));
+        output
+    }
+
+    // this bit count should include sign bit
+    pub fn packing_and_check_range(&mut self, input: TensorAddress, bits: u8, binary: bool) -> TensorAddress {
+        let bits = if binary {1} else {bits};
+        let n_packed = crate::scalar::SCALAR_SIZE as u8 / bits;
+        let output = self.mem.alloc(&[(self.mem[input].size() - 1)/n_packed as u32 + 1]);
+        self.packing_tensor(input, output, bits, n_packed, 1, BigScalar::zero(), true);
+        if binary {
+            for i in self.mem[input].iter() {
+                self.a.push((self.n_cons, i, BigScalar::one()));
+                self.b.push((self.n_cons, i, BigScalar::one()));
+                self.c.push((self.n_cons, self.mem.one_var, BigScalar::one()));
+                self.n_cons += 1;
+            }
+        } else {
+            let temp_output = self.mem.alloc(&self.mem[input].dim.to_owned());
+            self.sign(input, temp_output, bits - 1);
+        }
+        output
     }
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::scalar::slice_to_scalar;
     #[test]
     fn test_poseidon_perm() {
         let mut c = ConstraintSystem::new();
@@ -379,8 +417,7 @@ mod test {
     fn test_poseidon_hash() {
         let mut c = ConstraintSystem::new();
         let data = c.mem.alloc(&[5]);
-        let output = c.mem.alloc(&[3]);
-        c.poseidon_hash(&[data], output);
+        let output = c.poseidon_hash(&[data]);
 
         println!("Constraints {}", c.n_cons);
 

@@ -398,6 +398,9 @@ impl ConstraintSystem {
 
             let sum_cons = self.n_cons;
             self.n_cons += 1;
+            self.b.push((sum_cons, self.mem.one_var, BigScalar::one()));
+            self.c.push((sum_cons, abs, BigScalar::one()));
+
 
             let mut pow: u32 = 1;
             for bit in bits.iter() {
@@ -420,6 +423,7 @@ impl ConstraintSystem {
 
     pub fn sign(&mut self, input: TensorAddress, output: TensorAddress, max_bits: u8) {
         let mut dim = self.mem[input].dim.to_vec();
+
         let abs = self.mem.alloc(&dim);
         dim.push(max_bits as u32);
         let bits = self.mem.alloc(&dim);
