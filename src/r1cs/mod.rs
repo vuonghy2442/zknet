@@ -770,31 +770,18 @@ impl ConstraintSystem {
             extract_sign_part(self,e, bit_length);
         }
 
-        if let Some(e) = ext_right_rem {
-            assert!(false);
-            extract_sign_part(self,e, bit_length);
-        }
-
+        assert_eq!(ext_right_rem, None);
         if let Some(left_rem) = ext_left_rem {
             if let Some(right) = ext_right {
                 let sum_res = self.mem.alloc(&[fout, row - k_row + 1, self.mem[right].dim[2] - 1, k_col - 1]);
-                let left = self.mem.save(self.mem[ext_left.unwrap()].at(&[RangeFull(), RangeFull(), RangeFrom(1..)]));
+                let left = self.mem.save(self.mem[ext_left.unwrap()].at(&[RangeFull(), RangeFrom(1..)]));
                 self.sum_two(right, left, sum_res);
                 self.sign(sum_res, output_part.unwrap(), bit_length - 1);
 
-                let sum_res = self.mem.alloc(&[fout, row - k_row + 1, left_rem]);
-                let right_last = self.mem.save(self.mem[right].at(&[RangeFull(), RangeFull(), Id(self.mem[right].dim[2] - 1)]));
-                self.sum_two(right_last, left_rem, sum_res);
+                let sum_res = self.mem.alloc(&[fout, row - k_row + 1, self.mem[left_rem].dim[2]]);
+                let right_rem = self.mem.save(self.mem[right].at(&[RangeFull(), Id(self.mem[right].dim[2] - 1), RangeTo(..self.mem[left_rem].dim[2])]));
+                self.sum_two(right_rem, left_rem, sum_res);
                 self.sign(sum_res, output_part_rem.unwrap(), bit_length - 1);
-            }
-        } else if let Some(right) = ext_right {
-            if let Some(left) = ext_left {
-                if self.mem[right].dim[2] + 1 == self.mem[left].dim[2] {
-                    let sum_res = self.mem.alloc(&[fout, row - k_row + 1, self.mem[right].dim[2], k_col - 1]);
-                    let left = self.mem.save(self.mem[ext_left.unwrap()].at(&[RangeFull(), RangeFull(), RangeFrom(1..)]));
-                    self.sum_two(right, left, sum_res);
-                    self.sign(sum_res, output_part.unwrap(), bit_length - 1);
-                }
             }
         }
     }
