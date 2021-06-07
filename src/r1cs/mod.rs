@@ -215,6 +215,7 @@ impl ConstraintSystem {
             }
 
             if sa * sb != sc {
+                println!("Constraint {}", i);
                 println!("{} {} {}", self.a[ai-1].1, self.b[bi-1].1, self.c[ci-1].1);
                 println!("{} {} {}", sa.as_bytes()[0], sb.as_bytes()[0], sc.as_bytes()[0]);
                 return false;

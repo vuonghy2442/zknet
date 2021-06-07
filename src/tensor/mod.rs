@@ -9,7 +9,7 @@ pub enum TensorIndex {
     Id(u32)
 }
 
-#[derive(Clone)]
+#[derive(Clone,Debug)]
 pub struct VariableTensor {
     pub start: u32,
     pub dim: Box<[u32]>,
@@ -63,6 +63,16 @@ impl VariableTensor {
         }
     }
 
+    pub fn new_const(var: u32, shape: &[u32]) -> VariableTensor {
+        let mut step = Vec::new();
+        step.resize(shape.len(), 0);
+        VariableTensor {
+            start: var,
+            dim: shape.to_vec().into_boxed_slice(),
+            step: step.into_boxed_slice()
+        }
+    }
+
     pub fn size(&self) -> u32 {
         let mut s = 1u32;
         for d in self.dim.iter() {
@@ -79,6 +89,24 @@ impl VariableTensor {
             dim: self.dim.clone(),
             step: step.into_boxed_slice()
         }
+    }
+
+    pub fn reshape(&self, new_shape: &[u32]) -> VariableTensor{
+        assert_eq!(self.dim.len(), 1);
+
+        let mut step: Vec<i32> = Vec::new();
+        step.resize(new_shape.len(), 0);
+        step[new_shape.len() - 1] = self.step[0];
+        for i in (1..new_shape.len()).rev() {
+            step[i-1] = step[i] * new_shape[i] as i32;
+        }
+        let res = VariableTensor {
+            start: self.start,
+            step: step.into_boxed_slice(),
+            dim: new_shape.to_vec().into_boxed_slice()
+        };
+        assert_eq!(res.size(), self.size());
+        res
     }
 
     pub fn partition(&self, axis: usize, length: u32) -> VariableTensor {
