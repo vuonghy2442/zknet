@@ -1,5 +1,7 @@
 
-use crate::{r1cs::{ConstraintSystem, Functions, Id, Memory, MemoryManager, Range, RangeFrom, RangeTo, TensorAddress, ScalarAddress}, tensor::VariableTensor};
+use std::usize;
+
+use crate::{r1cs::{ConstraintSystem, Functions, Memory, MemoryManager, Range, RangeTo, TensorAddress, ScalarAddress}, tensor::{VariableTensor, VariableTensorListIter}};
 use curve25519_dalek::scalar::Scalar as BigScalar;
 use crate::scalar::{from_hex, Scalar, slice_to_scalar};
 
@@ -222,7 +224,6 @@ impl ConstraintSystem {
         } else {
             panic!("Params doesn't match");
         }
-
     }
 
     fn poseidon_perm_box(&mut self, input: TensorAddress, output: TensorAddress) {
@@ -244,7 +245,107 @@ impl ConstraintSystem {
         self.compute.push((Box::new([input, output, input_added, temp]), Functions::PoseidonPerm))
     }
 
+    pub fn run_poseidon_hash<T: Scalar>(mem: &MemoryManager, param: &[u32], var_dict: &mut Memory<T>) {
+        if let [output, input_added, temp_res, temp_val] = param[..4] {
+            let input = &param[4..];
+            let mut input_tensor = Vec::new();
+            let mut size = 0;
+            for &i in input {
+                size += mem[i].size();
+                input_tensor.push(mem[i].clone());
+            }
+
+            let step = (size - 1) / constant::RATE as u32 + 1;
+
+            let mut it = VariableTensorListIter::from_tensor_list(&input_tensor);
+            let mut state = Vec::new();
+            for _ in 0..constant::RATE {
+                if let Some(v) = it.next() {
+                    state.push(v);
+                } else {
+                    break
+                }
+            }
+            state.resize(constant::T, mem.one_var);
+
+            for i in 0..step {
+                if i != 0 {
+                    //add to state
+                    for j in 0..constant::RATE {
+                        if let Some(v) = it.next() {
+                            let added_state =  mem[input_added].at_idx(&[i - 1, j as u32]);
+                            var_dict[added_state as usize] = var_dict[state[j] as usize] + var_dict[v as usize];
+                            state[j] = added_state;
+                        } else {
+                            break
+                        }
+                    }
+                }
+                let next_state = if i == step - 1 {
+                    mem[output].iter().collect::<Vec<u32>>()
+                } else {
+                    mem[temp_res].at_(&[i]).iter().collect::<Vec<u32>>()
+                };
+                Self::run_added_poseidon_perm_box(&state, &next_state, split_temp_tensor(&mem[temp_val].at_(&[i])), var_dict);
+            }
+        } else {
+            panic!("Params doesn't match");
+        }
+    }
+
     pub fn poseidon_hash(&mut self, input: &[TensorAddress], output: TensorAddress) {
+        let mut input_tensor = Vec::new();
+        let mut size = 0;
+        for &i in input {
+            size += self.mem[i].size();
+            input_tensor.push(self.mem[i].clone());
+        }
+
+        let step = (size - 1) / constant::RATE as u32 + 1;
+        let input_added = self.mem.alloc(&[step - 1, constant::RATE as u32]);
+        let temp_res = self.mem.alloc(&[step - 1, constant::T as u32]);
+        let temp_val = self.mem.alloc(&[step, constant::TEMP_SIZE as u32]);
+
+        let mut it = VariableTensorListIter::from_tensor_list(&input_tensor);
+        let mut state = Vec::new();
+        for _ in 0..constant::RATE {
+            if let Some(v) = it.next() {
+                state.push(v);
+            } else {
+                break
+            }
+        }
+        state.resize(constant::T, self.mem.one_var);
+
+        for i in 0..step {
+            if i != 0 {
+                //add to state
+                for j in 0..constant::RATE {
+                    if let Some(v) = it.next() {
+                        let added_state =  self.mem[input_added].at_idx(&[i - 1, j as u32]);
+                        self.a.push((self.n_cons, state[j], BigScalar::one()));
+                        self.a.push((self.n_cons, v, BigScalar::one()));
+                        self.b.push((self.n_cons, self.mem.one_var, BigScalar::one()));
+                        self.c.push((self.n_cons, added_state, BigScalar::one()));
+                        self.n_cons += 1;
+                        state[j] = added_state;
+                    } else {
+                        break
+                    }
+                }
+            }
+            let next_state = if i == step - 1 {
+                self.mem[output].iter().collect::<Vec<u32>>()
+            } else {
+                self.mem[temp_res].at_(&[i]).iter().collect::<Vec<u32>>()
+            };
+            self.added_poseidon_perm_box(&state, &next_state, self.mem[temp_val].at_(&[i]));
+        }
+        let mut params = Vec::new();
+        params.extend_from_slice(&[output, input_added, temp_res, temp_val]);
+        params.extend_from_slice(input);
+
+        self.compute.push((params.into_boxed_slice(), Functions::PoseidonHash))
     }
 }
 
@@ -272,7 +373,22 @@ mod test {
             BigScalar::from_bits([44, 91, 7, 19, 225, 230, 152, 101, 103, 253, 203, 97, 123, 183, 146, 174, 17, 84, 73, 72, 40, 114, 12, 208, 249, 107, 65, 202, 79, 229, 186, 11]),
             BigScalar::from_bits([201, 113, 137, 17, 45, 182, 4, 132, 109, 198, 198, 194, 150, 245, 140, 156, 217, 196, 175, 214, 147, 230, 55, 186, 204, 150, 220, 14, 211, 15, 63, 11])
         ]);
+    }
 
+    #[test]
+    fn test_poseidon_hash() {
+        let mut c = ConstraintSystem::new();
+        let data = c.mem.alloc(&[5]);
+        let output = c.mem.alloc(&[3]);
+        c.poseidon_hash(&[data], output);
 
+        println!("Constraints {}", c.n_cons);
+
+        let mut mem = c.mem.new_memory::<BigScalar>();
+        c.load_memory(data, &mut mem, &slice_to_scalar(&[1,2,3,4,5]));
+        c.sort_cons();
+        c.compute(&mut mem);
+
+        assert!(c.verify(&mem));
     }
 }

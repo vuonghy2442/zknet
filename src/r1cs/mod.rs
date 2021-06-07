@@ -15,11 +15,11 @@ pub type TensorAddress = u32;
 type Memory<T> = [T];
 
 pub trait Functional: Sized {
-    const FUNCTIONS: [fn(mem: &MemoryManager, &[u32], &mut [Self]); 9];
+    const FUNCTIONS: [fn(mem: &MemoryManager, &[u32], &mut [Self]); 10];
 }
 
 impl<T:Scalar> Functional for T {
-    const FUNCTIONS: [fn(mem: &MemoryManager, &[u32], &mut [T]); 9] = [
+    const FUNCTIONS: [fn(mem: &MemoryManager, &[u32], &mut [T]); 10] = [
         ConstraintSystem::run_sum::<T>,
         ConstraintSystem::run_mul::<T>,
         ConstraintSystem::run_decompose::<T>,
@@ -28,7 +28,8 @@ impl<T:Scalar> Functional for T {
         ConstraintSystem::run_packing_tensor::<T>,
         ConstraintSystem::run_conv2d_compact::<T>,
         ConstraintSystem::run_sum_two::<T>,
-        ConstraintSystem::run_poseidon_perm_box::<T>
+        ConstraintSystem::run_poseidon_perm_box::<T>,
+        ConstraintSystem::run_poseidon_hash::<T>,
     ];
 }
 
@@ -92,7 +93,8 @@ enum Functions {
     Packing = 5,
     ConvCompact = 6,
     SumTwo = 7,
-    PoseidonPerm = 8
+    PoseidonPerm = 8,
+    PoseidonHash = 9
 }
 
 impl ConstraintSystem {

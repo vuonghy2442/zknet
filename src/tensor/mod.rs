@@ -227,7 +227,41 @@ impl VariableTensor {
             val_next: self.start as i32
         }
     }
+}
 
+pub struct VariableTensorListIter {
+    data: Vec<VariableTensor>,
+    i: usize,
+    it: VariableTensorIter
+}
+
+impl VariableTensorListIter {
+    pub fn from_tensor_list(data: &[VariableTensor]) -> VariableTensorListIter {
+        VariableTensorListIter {
+            data: data.to_vec(),
+            i: 0,
+            it: data[0].iter()
+        }
+    }
+}
+
+impl Iterator for VariableTensorListIter {
+    type Item = u32;
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            let res = self.it.next();
+            match res {
+                Some(_) => return res,
+                None=> {
+                    self.i += 1;
+                    if self.i >= self.data.len() {
+                        return None
+                    }
+                    self.it = self.data[self.i].iter();
+                }
+            }
+        }
+    }
 }
 
 
