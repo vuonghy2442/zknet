@@ -742,8 +742,10 @@ impl ConstraintSystem {
             c.sign(extracted, output, bit_length - 1);
         }
 
+        let reduced_extract = self.mem.save(self.mem[extracted].at(&[RangeFull(), RangeFull(), RangeTo(..extracted_length - k_col  + 1)]));
+
         let [(output_full, output_full_rem), (output_part, output_part_rem), (_,_)]= split_tensor(&mut self.mem, output, packed_size, [0, packed_size-(k_col-1), packed_size]);
-        let [(ext_left, ext_left_rem), (ext_full, ext_full_rem), (ext_right,ext_right_rem), (_,_)]= split_tensor(&mut self.mem, extracted, n_packed, [0, k_col-1, packed_size, n_packed]);
+        let [(ext_left, ext_left_rem), (ext_full, ext_full_rem), (ext_right,ext_right_rem), (_,_)]= split_tensor(&mut self.mem, reduced_extract, n_packed, [0, k_col-1, packed_size, n_packed]);
 
         // extract the fully correct part
         if let Some(e) = ext_full {
@@ -751,6 +753,7 @@ impl ConstraintSystem {
         }
 
         if let Some(e) = ext_full_rem {
+            println!("{:#?} {:#?}", self.mem[e].dim, self.mem[output_full_rem.unwrap()].dim);
             self.sign(e, output_full_rem.unwrap(), bit_length - 1);
         }
 
@@ -768,6 +771,7 @@ impl ConstraintSystem {
         }
 
         if let Some(e) = ext_right_rem {
+            assert!(false);
             extract_sign_part(self,e, bit_length);
         }
 
