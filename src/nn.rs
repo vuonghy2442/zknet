@@ -73,6 +73,15 @@ fn linear(c: &mut ConstraintSystem, input: TensorAddress, n_feature: u32) -> (Te
     return (output, weight, bias);
 }
 
+fn linear_compact(c: &mut ConstraintSystem, input: TensorAddress, n_feature: u32, max_bits: u8, relu: bool) -> (TensorAddress, TensorAddress, TensorAddress) {
+    let output = c.mem.alloc(&[n_feature]);
+    let weight = c.mem.alloc(&[n_feature, c.mem[input].size()]);
+    let bias = c.mem.alloc(&[n_feature]);
+
+    let res = c.fully_connected_compact(input, output, weight, Some(bias), max_bits + 1, relu);
+    return (if relu {res} else {output}, weight, bias);
+}
+
 pub struct NeuralNetwork {
     cons: ConstraintSystem,
     weight_map: HashMap<String, TensorAddress>,
@@ -106,11 +115,10 @@ impl NeuralNetwork {
         let conv3_cons = c.cons_size();
         let pool2 = max_pool(&mut c, conv3_out_sign);
         let pool2_cons = c.cons_size();
-        let (fc1_out, fc1_weight, fc1_bias) = linear(&mut c, pool2, 500);
+        let (relu_out, fc1_weight, fc1_bias) = linear_compact(&mut c, pool2, 500, 15, true);
         let fc1_cons = c.cons_size();
-        let relu_out = relu_activation(&mut c, fc1_out, 11);
         let relu_cons = c.cons_size();
-        let (fc2_out, fc2_weight, fc2_bias) = linear(&mut c, relu_out, 10);
+        let (fc2_out, fc2_weight, fc2_bias) = linear_compact(&mut c, relu_out, 10, 30, false);
         let fc2_cons = c.cons_size();
 
         let conv1_weight_packed = c.packing_and_check_range(conv1_weight, 16, false);
