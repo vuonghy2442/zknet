@@ -246,7 +246,7 @@ impl ConstraintSystem {
     }
 
     pub fn run_poseidon_hash<T: Scalar>(mem: &MemoryManager, param: &[u32], var_dict: &mut Memory<T>) {
-        if let [input_added, temp_res, temp_val,output,output_rem] = param[..5] {
+        if let [input_added, temp_res, temp_val, output, output_rem] = param[..5] {
             let input = &param[5..];
             let mut input_tensor = Vec::new();
             let mut size = 0;
@@ -294,6 +294,7 @@ impl ConstraintSystem {
                     mem[temp_res].at_(&[i]).iter().collect::<Vec<u32>>()
                 };
                 Self::run_added_poseidon_perm_box(&state, &next_state, split_temp_tensor(&mem[temp_val].at_(&[i])), var_dict);
+                state = next_state;
             }
         } else {
             panic!("Params doesn't match");
@@ -356,6 +357,7 @@ impl ConstraintSystem {
                 self.mem[temp_res].at_(&[i]).iter().collect::<Vec<u32>>()
             };
             self.added_poseidon_perm_box(&state, &next_state, self.mem[temp_val].at_(&[i]));
+            state = next_state;
         }
         let mut params = Vec::new();
         params.extend_from_slice(&[input_added, temp_res, temp_val, output, output_rem]);
@@ -370,7 +372,7 @@ impl ConstraintSystem {
         let bits = if binary {1} else {bits};
         let n_packed = crate::scalar::SCALAR_SIZE as u8 / bits;
         let output = self.mem.alloc(&[(self.mem[input].size() - 1)/n_packed as u32 + 1]);
-        self.packing_tensor(input, output, bits, n_packed, 1, BigScalar::zero(), true);
+        self.packing_tensor(input, output, bits, n_packed, 1, BigScalar::one(), true);
         if binary {
             for i in self.mem[input].iter() {
                 self.a.push((self.n_cons, i, BigScalar::one()));
@@ -417,7 +419,7 @@ mod test {
     fn test_poseidon_hash() {
         let mut c = ConstraintSystem::new();
         let data = c.mem.alloc(&[5]);
-        let output = c.poseidon_hash(&[data]);
+        c.poseidon_hash(&[data]);
 
         println!("Constraints {}", c.n_cons);
 

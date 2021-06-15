@@ -37,8 +37,9 @@ fn main() {
 
     let result = to_vec_i32(&result);
     let mut prob = Vec::new();
-    for r in result{
-        prob.push(r as f64/ 2u32.pow(20) as f64);
+    for (i, &r) in result.iter().enumerate(){
+        println!("Raw {}: {}", i, r);
+        prob.push(r as f64/ 2u32.pow(10) as f64);
     }
     softmax(&mut prob);
     for (i,r) in prob.iter().enumerate() {

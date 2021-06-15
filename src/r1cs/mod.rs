@@ -550,6 +550,7 @@ impl ConstraintSystem {
             T::one()
         };
 
+
         let base =  T::from_i32(1 << bit_length);
         let mut is_running = true;
         let mut step = scale;

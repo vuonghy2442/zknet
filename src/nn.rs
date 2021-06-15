@@ -101,53 +101,43 @@ impl NeuralNetwork {
     pub fn new() -> NeuralNetwork {
         let mut c = ConstraintSystem::new();
         let input = c.mem.alloc(&[1,28,28]);
-        let input_resized = resize(&mut c, input, &[1, 26, 26]);
         let input_cons = c.cons_size();
-        let (conv1_out, conv1_weight, conv1_bias) = convolution_layer(&mut c, input_resized, [5,5], 20, 0);
+        let (conv1_out, conv1_weight, conv1_bias) = convolution_layer(&mut c, input, [5,5], 20, 0); // 24 x 24
         let conv1_cons = c.cons_size();
-        let conv1_out_sign = sign_activation(&mut c, conv1_out, 25);
+        let conv1_out_sign = sign_activation(&mut c, conv1_out, 22);
         let conv1_sign_cons = c.cons_size();
-        let (conv2_out_sign, conv2_weight, conv2_bias) = convolution_layer_sign_compact(&mut c, conv1_out_sign, [3,3], 20, 0, 9);
-        let conv2_cons = c.cons_size();
-        let pool1 = max_pool(&mut c, conv2_out_sign);
+        let pool1 = max_pool(&mut c, conv1_out_sign); // 12 x 12
         let pool1_cons = c.cons_size();
-        let (conv3_out_sign, conv3_weight, conv3_bias) = convolution_layer_sign_compact(&mut c, pool1, [3,3], 50, 2, 11);
-        let conv3_cons = c.cons_size();
-        let pool2 = max_pool(&mut c, conv3_out_sign);
+        let (conv2_out_sign, conv2_weight, conv2_bias) = convolution_layer_sign_compact(&mut c, pool1, [5,5], 50, 0, 9); // 8 x 8
+        let conv2_cons = c.cons_size();
+        let pool2 = max_pool(&mut c, conv2_out_sign);
         let pool2_cons = c.cons_size();
         let (relu_out, fc1_weight, fc1_bias) = linear_compact(&mut c, pool2, 500, 15, true);
         let fc1_cons = c.cons_size();
-        let relu_cons = c.cons_size();
-        let (fc2_out, fc2_weight, fc2_bias) = linear_compact(&mut c, relu_out, 10, 30, false);
+        let (fc2_out, fc2_weight, fc2_bias) = linear_compact(&mut c, relu_out, 10, 20, false);
         let fc2_cons = c.cons_size();
 
-        let conv1_weight_packed = c.packing_and_check_range(conv1_weight, 16, false);
-        let conv1_bias_packed = c.packing_and_check_range(conv1_bias, 23, false);
+        let conv1_weight_packed = c.packing_and_check_range(conv1_weight, 13, false);
+        let conv1_bias_packed = c.packing_and_check_range(conv1_bias, 20, false);
         let conv2_weight_packed = c.packing_and_check_range(conv2_weight, 1, true);
-        let conv2_bias_packed = c.packing_and_check_range(conv2_bias, 7, false);
-        let conv3_weight_packed = c.packing_and_check_range(conv3_weight, 1, true);
-        let conv3_bias_packed = c.packing_and_check_range(conv3_bias, 12, false);
+        let conv2_bias_packed = c.packing_and_check_range(conv2_bias, 8, false);
         let fc1_weight_packed = c.packing_and_check_range(fc1_weight, 1, true);
         let fc1_bias_packed = c.packing_and_check_range(fc1_bias, 3, false);
-        let fc2_weight_packed = c.packing_and_check_range(fc2_weight, 19, false);
-        let fc2_bias_packed = c.packing_and_check_range(fc2_bias, 21, false);
+        let fc2_weight_packed = c.packing_and_check_range(fc2_weight, 10, false);
+        let fc2_bias_packed = c.packing_and_check_range(fc2_bias, 11, false);
         let packed_cons = c.cons_size();
 
-
-        let hash_output = c.poseidon_hash(&[conv1_weight_packed, conv1_bias_packed, conv2_weight_packed, conv2_bias_packed,
-            conv3_weight_packed, conv3_bias_packed, fc1_weight_packed, fc1_bias_packed,
-            fc2_weight_packed, fc2_bias_packed]);
+        let hash_output = c.poseidon_hash(&[conv1_weight_packed, conv1_bias_packed, conv2_weight_packed, conv2_bias_packed
+            , fc1_weight_packed, fc1_bias_packed, fc2_weight_packed, fc2_bias_packed]);
         let hash_cons = c.cons_size();
 
         println!("conv1 constraints {}", conv1_cons - input_cons);
         println!("conv1_sign constraints {}", conv1_sign_cons - conv1_cons);
-        println!("conv2 constraints {}", conv2_cons - conv1_sign_cons);
-        println!("pool1 constraints {}", pool1_cons - conv2_cons);
-        println!("conv3 constraints {}", conv3_cons - pool1_cons);
-        println!("pool2 constraints {}", pool2_cons - conv3_cons);
+        println!("pool1 constraints {}", pool1_cons - conv1_sign_cons);
+        println!("conv2 constraints {}", conv2_cons - pool1_cons);
+        println!("pool2 constraints {}", pool2_cons - conv2_cons);
         println!("fc1 constraints {}", fc1_cons - pool2_cons);
-        println!("relu constraints {}", relu_cons - fc1_cons);
-        println!("fc2 constraints {}",fc2_cons - relu_cons);
+        println!("fc2 constraints {}",fc2_cons - fc1_cons);
         println!("packed constraints {}",packed_cons - fc2_cons);
         println!("hash constraints {}",hash_cons - packed_cons);
 
@@ -160,8 +150,6 @@ impl NeuralNetwork {
             String::from("conv1_bias") => conv1_bias,
             String::from("conv2_weight") => conv2_weight,
             String::from("conv2_bias") => conv2_bias,
-            String::from("conv3_weight") => conv3_weight,
-            String::from("conv3_bias") => conv3_bias,
             String::from("fc1_weight") => fc1_weight,
             String::from("fc1_bias") => fc1_bias,
             String::from("fc2_weight") => fc2_weight,
