@@ -5,6 +5,7 @@ mod zk;
 mod scalar;
 use std::io;
 use std::io::Write;
+use rand;
 
 use crate::scalar::{slice_to_scalar, to_vec_i32};
 use curve25519_dalek::scalar::Scalar;
@@ -20,7 +21,8 @@ fn softmax(x: &mut [f64]) {
     }
 }
 fn main() {
-    let network = nn::NeuralNetwork::new();
+    let mut rng = rand::thread_rng();
+    let network = nn::NeuralNetwork::new(false);
     let mut memory = network.load_weight::<Scalar>("params/params.pkl");
     let dataset = nn::load_dataset("dataset/test.pkl");
     print!("Done loading! Enter sample id: ");
@@ -28,7 +30,11 @@ fn main() {
     let mut x: String = String::new();
     io::stdin().read_line(&mut x).expect("Failed to get console input");
     let x = x.trim().parse::<usize>().expect("Failed to parse int");
-    let (result, hash) = network.run(&mut memory, &slice_to_scalar(&dataset[x]), true);
+
+    let commit_open = Scalar::random(&mut rng);
+    println!("Generate random commit open: {:#?}", commit_open);
+
+    let (result, hash) = network.run(&mut memory, &slice_to_scalar(&dataset[x]), &[commit_open], true);
     println!("Hash value:");
     for r in hash {
         println!("{:#?}", r);

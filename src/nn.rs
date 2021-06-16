@@ -87,7 +87,9 @@ pub struct NeuralNetwork {
     weight_map: HashMap<String, TensorAddress>,
     input: TensorAddress,
     output: TensorAddress,
-    commit_hash: TensorAddress
+    ground_truth: Option<TensorAddress>,
+    commit_hash: TensorAddress,
+    commit_open: TensorAddress
 }
 
 pub fn load_dataset(file: &str) -> Vec<Vec<i32>> {
@@ -98,7 +100,7 @@ pub fn load_dataset(file: &str) -> Vec<Vec<i32>> {
 
 
 impl NeuralNetwork {
-    pub fn new() -> NeuralNetwork {
+    pub fn new(accuracy: bool) -> NeuralNetwork {
         let mut c = ConstraintSystem::new();
         let input = c.mem.alloc(&[1,28,28]);
         let input_cons = c.cons_size();
@@ -127,7 +129,9 @@ impl NeuralNetwork {
         let fc2_bias_packed = c.packing_and_check_range(fc2_bias, 11, false);
         let packed_cons = c.cons_size();
 
-        let hash_output = c.poseidon_hash(&[conv1_weight_packed, conv1_bias_packed, conv2_weight_packed, conv2_bias_packed
+        let commit_open = c.mem.alloc(&[1]);
+
+        let hash_output = c.poseidon_hash(&[commit_open, conv1_weight_packed, conv1_bias_packed, conv2_weight_packed, conv2_bias_packed
             , fc1_weight_packed, fc1_bias_packed, fc2_weight_packed, fc2_bias_packed]);
         let hash_cons = c.cons_size();
 
@@ -140,6 +144,19 @@ impl NeuralNetwork {
         println!("fc2 constraints {}",fc2_cons - fc1_cons);
         println!("packed constraints {}",packed_cons - fc2_cons);
         println!("hash constraints {}",hash_cons - packed_cons);
+
+        let (output, ground_truth) = if accuracy {
+            let ground_truth = c.mem.alloc(&[1]);
+            let value = c.mem.alloc(&[1]);
+            let result = c.mem.alloc(&[1]);
+
+            c.multiplexer(fc2_out, c.mem[ground_truth].begin(), c.mem[value].begin());
+            c.is_max(input, c.mem[value].begin(), c.mem[result].begin(), 20);
+            println!("accuracy constraints {}", c.cons_size() - hash_cons);
+            (result, Some(ground_truth))
+        } else {
+            (fc2_out, None)
+        };
 
         c.reorder_for_spartan(&[input, fc2_out, hash_output]);
         c.sort_cons();
@@ -161,7 +178,9 @@ impl NeuralNetwork {
             weight_map,
             input,
             output: fc2_out,
-            commit_hash: hash_output
+            ground_truth,
+            commit_hash: hash_output,
+            commit_open
         }
     }
 
@@ -182,8 +201,9 @@ impl NeuralNetwork {
         return self.cons.get_spartan_instance();
     }
 
-    pub fn run<T: Scalar>(&self, var_dict: &mut [T], input: &[T], verify: bool) -> (Vec<T>, Vec<T>) {
+    pub fn run<T: Scalar>(&self, var_dict: &mut [T], input: &[T], commit_open: &[T], verify: bool) -> (Vec<T>, Vec<T>) {
         self.cons.load_memory(self.input, var_dict, input);
+        self.cons.load_memory(self.commit_open, var_dict, commit_open);
         self.cons.compute(var_dict);
 
         println!("Done compute");

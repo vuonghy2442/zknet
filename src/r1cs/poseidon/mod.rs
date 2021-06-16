@@ -226,7 +226,7 @@ impl ConstraintSystem {
         }
     }
 
-    fn poseidon_perm_box(&mut self, input: TensorAddress, output: TensorAddress) {
+    pub fn poseidon_perm_box(&mut self, input: TensorAddress, output: TensorAddress) {
         let input_added = self.mem.alloc(&[constant::T as u32]); //add round key
         for (i, (y,x)) in self.mem[input_added].iter().zip(self.mem[input].iter()).enumerate() {
             self.a.push((self.n_cons, x, BigScalar::one()));

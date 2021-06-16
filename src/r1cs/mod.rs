@@ -1,9 +1,10 @@
 
-use crate::tensor::{VariableTensor};
+use crate::tensor::{VariableTensor, VariableTensorListIter};
 use itertools::izip;
 use crate::tensor::TensorIndex::{Id, Range, RangeFull, RangeTo, RangeFrom};
 use std::ops::{Index};
 use std::cmp::{min, max};
+use std::usize;
 use curve25519_dalek::scalar::Scalar as BigScalar;
 use crate::scalar::{self, SCALAR_SIZE, Scalar, power_of_two, scalar_to_vec_u32};
 
@@ -15,11 +16,11 @@ pub type TensorAddress = u32;
 type Memory<T> = [T];
 
 pub trait Functional: Sized {
-    const FUNCTIONS: [fn(mem: &MemoryManager, &[u32], &mut [Self]); 11];
+    const FUNCTIONS: [fn(mem: &MemoryManager, &[u32], &mut [Self]); 13];
 }
 
 impl<T:Scalar> Functional for T {
-    const FUNCTIONS: [fn(mem: &MemoryManager, &[u32], &mut [T]); 11] = [
+    const FUNCTIONS: [fn(mem: &MemoryManager, &[u32], &mut [T]); 13] = [
         ConstraintSystem::run_sum::<T>,
         ConstraintSystem::run_mul::<T>,
         ConstraintSystem::run_decompose::<T>,
@@ -31,6 +32,8 @@ impl<T:Scalar> Functional for T {
         ConstraintSystem::run_poseidon_perm_box::<T>,
         ConstraintSystem::run_poseidon_hash::<T>,
         ConstraintSystem::run_fully_connected_compact::<T>,
+        ConstraintSystem::run_is_max::<T>,
+        ConstraintSystem::run_multiplexer::<T>,
     ];
 }
 
@@ -97,6 +100,8 @@ enum Functions {
     PoseidonPerm = 8,
     PoseidonHash = 9,
     FCCompact = 10,
+    IsMax = 11,
+    Multiplexer = 12
 }
 
 impl ConstraintSystem {
@@ -165,10 +170,13 @@ impl ConstraintSystem {
 
         // Remap sum
         for (params, r) in self.compute.iter_mut() {
-            if let Functions::Sum = r {
-                for data in params[1..].iter_mut() {
-                    *data = new_index(*data);
-                }
+            let pos = match &r {
+                Functions::Sum => 1,
+                Functions::IsMax | Functions::Multiplexer => 4,
+                _ => continue
+            };
+            for data in params[pos..].iter_mut() {
+                *data = new_index(*data);
             }
         }
     }
@@ -321,6 +329,152 @@ impl ConstraintSystem {
         self.sum(tmp, output, bias);
     }
 
+    fn run_is_max<T: Scalar>(mem: &MemoryManager, param: &[u32], var_dict: &mut Memory<T>) {
+        if let [input, diff, sign, mul, max_pos, result] = *param {
+            for (i,j,k) in izip!(mem[input].iter(), mem[diff].iter(), mem[sign].iter()) {
+                var_dict[j as usize] = var_dict[max_pos as usize] - var_dict[i as usize];
+                var_dict[k as usize] = if var_dict[j as usize].is_nonneg() {
+                    T::one()
+                } else {
+                    -T::one()
+                }
+            }
+
+            let mul_tensor = VariableTensorListIter::from_tensor_list(&[mem[mul].clone(), VariableTensor::new_const(result, &[1])]);
+            let mut prev = mem.one_var;
+            for (i, j) in mem[sign].iter().zip(mul_tensor) {
+                var_dict[j as usize] = if var_dict[i as usize] == T::one() && var_dict[prev as usize] == T::one() {
+                    T::one()
+                } else {
+                    T::zero()
+                };
+                prev = j;
+            }
+        } else {
+            panic!("params don't match");
+        }
+    }
+
+    pub fn is_max(&mut self, input: TensorAddress, max_pos: ScalarAddress, result: ScalarAddress, max_bits: u8) {
+        let diff = self.mem.alloc(&[self.mem[input].size()]);
+        let sign = self.mem.alloc(&[self.mem[input].size()]);
+        let mul = self.mem.alloc(&[self.mem[input].size() - 1]);
+
+        for (i,j) in self.mem[input].iter().zip(self.mem[diff].iter()) {
+            self.a.push((self.n_cons, max_pos, BigScalar::one()));
+            self.a.push((self.n_cons, i, -BigScalar::one()));
+            self.b.push((self.n_cons, self.mem.one_var, BigScalar::one()));
+            self.c.push((self.n_cons, j, BigScalar::one()));
+            self.n_cons += 1;
+        }
+
+        let mul_tensor = VariableTensorListIter::from_tensor_list(&[self.mem[mul].clone(), VariableTensor::new_const(result, &[1])]);
+        let mut prev = self.mem.one_var;
+        for (i, j) in self.mem[sign].iter().zip(mul_tensor) {
+            self.a.push((self.n_cons, i, BigScalar::one()));
+            self.a.push((self.n_cons, self.mem.one_var, BigScalar::one()));
+            self.b.push((self.n_cons, prev, BigScalar::one()));
+            self.c.push((self.n_cons, j, BigScalar::from_i32(2)));
+            self.n_cons += 1;
+            prev = j;
+        }
+
+        self.compute.push((Box::new([input, diff, sign, mul, max_pos, result]), Functions::IsMax));
+        self.sign(diff, sign, max_bits);
+    }
+
+    fn run_multiplexer<T: Scalar>(mem: &MemoryManager, param: &[u32], var_dict: &mut Memory<T>) {
+        if let [input,index_bits, tmp_left, tmp, result] = *param {
+            let mut start = 0;
+            let mut cur_layer = VariableTensorListIter::from_tensor_list(&[mem[input].clone()]);
+            let mut size = mem[input].size();
+
+            for bit in mem[index_bits].iter() {
+                let half_size = size >> 1;
+                let is_odd = (size & 1) == 1;
+                let cur_tmp_left = mem[tmp_left].at(&[Range(start..start + half_size)]);
+                let cur_tmp = if size == 2 {
+                    VariableTensor::new_const(result, &[1])
+                } else {
+                    mem[tmp].at(&[Range(start..start + half_size)])
+                };
+                start += half_size;
+                size = (size >> 1) + (size & 1);
+
+                for (left, i) in izip!(cur_tmp_left.iter(), cur_tmp.iter()) {
+                    let (x, y) = (cur_layer.next().unwrap(), cur_layer.next().unwrap());
+                    var_dict[left as usize] = var_dict[x as usize] * (T::one() - var_dict[bit as usize]);
+                    var_dict[i as usize] = var_dict[y as usize] * var_dict[bit as usize] + var_dict[left as usize];
+                }
+                cur_layer = if is_odd {
+                    VariableTensorListIter::from_tensor_list(&[cur_tmp, VariableTensor::new_const(cur_layer.next().unwrap(), &[1])])
+                } else {
+                    VariableTensorListIter::from_tensor_list(&[cur_tmp])
+                }
+            }
+        } else {
+            panic!("Params don't match");
+        }
+    }
+
+    pub fn multiplexer(&mut self, input: TensorAddress, index: ScalarAddress, result: ScalarAddress) {
+        let mut size = self.mem[input].size();
+        let mut n_bits: u32 = 0;
+        let mut tmp_size = 0;
+        while size > 1 {
+            tmp_size += size >> 1;
+            size = (size >> 1) + (size & 1);
+            n_bits += 1;
+        }
+        let index = self.mem.save(VariableTensor::new_const(index, &[1]));
+        let index_bits = self.mem.alloc(&[1, n_bits]);
+        let index_two_complement = self.mem.alloc(&[1]);
+        let index_sign = self.mem.alloc(&[1]);
+
+        self.bit_decomposition(index, index_bits, index_sign, index_two_complement, true );
+
+        let tmp_left = self.mem.alloc(&[tmp_size]);
+        let tmp = self.mem.alloc(&[tmp_size - 1]);
+
+        let mut start = 0;
+        let mut cur_layer = VariableTensorListIter::from_tensor_list(&[self.mem[input].clone()]);
+        size = self.mem[input].size();
+        for bit in self.mem[index_bits].iter() {
+            let is_odd = (size & 1) == 1;
+
+            let cur_tmp_left = self.mem[tmp_left].at(&[Range(start..start + (size >> 1))]);
+            let cur_tmp = if size == 2 {
+                VariableTensor::new_const(result, &[1])
+            } else {
+                self.mem[tmp].at(&[Range(start..start + (size >> 1))])
+            };
+
+            start += size >> 1;
+            size = (size >> 1) + (size & 1);
+
+            for (left, i) in izip!(cur_tmp_left.iter(), cur_tmp.iter()) {
+                let (x, y) = (cur_layer.next().unwrap(), cur_layer.next().unwrap());
+                self.a.push((self.n_cons, x, BigScalar::one()));
+                self.b.push((self.n_cons, self.mem.one_var, BigScalar::one()));
+                self.b.push((self.n_cons, bit, -BigScalar::one()));
+                self.c.push((self.n_cons, left, BigScalar::one()));
+                self.n_cons += 1;
+
+                self.a.push((self.n_cons, y, BigScalar::one()));
+                self.b.push((self.n_cons, bit, BigScalar::one()));
+                self.c.push((self.n_cons, left, -BigScalar::one()));
+                self.c.push((self.n_cons, i, BigScalar::one()));
+                self.n_cons += 1;
+            }
+            cur_layer = if is_odd {
+                VariableTensorListIter::from_tensor_list(&[cur_tmp, VariableTensor::new_const(cur_layer.next().unwrap(), &[1])])
+            } else {
+                VariableTensorListIter::from_tensor_list(&[cur_tmp])
+            }
+        }
+        self.compute.push((Box::new([input, index_bits, tmp_left, tmp, result]), Functions::Multiplexer));
+    }
+
     pub fn conv2d(&mut self, input: TensorAddress, output: TensorAddress, weight: TensorAddress, bias: Option<(TensorAddress, u32)>) {
         let fout = self.mem[weight].dim[0];
         let kx = self.mem[weight].dim[2];
@@ -414,10 +568,10 @@ impl ConstraintSystem {
             self.c.push((sum_cons, two_complement, BigScalar::one()));
 
 
-            let mut pow: u32 = 1;
+            let mut pow: BigScalar = BigScalar::one();
             for bit in bits.iter() {
-                self.a.push((sum_cons, bit, BigScalar::from(pow)));
-                pow *= 2;
+                self.a.push((sum_cons, bit, pow));
+                pow *= BigScalar::from_i32(2);
 
                 // bit only 0 or 1 <=> bit^2 = bit
                 self.a.push((self.n_cons, bit, BigScalar::one()));
@@ -944,6 +1098,7 @@ impl ConstraintSystem {
         }
         sign
     }
+
 }
 
 #[cfg(test)]
@@ -1170,6 +1325,56 @@ mod tests {
         x.load_memory(weight, &mut mem, &slice_to_scalar(&[-2,3,-2,5,3,-1,5,0,3,2]));
         x.compute(&mut mem);
         assert_eq!(mem[x.mem[output].begin() as usize .. x.mem[output].end() as usize], slice_to_scalar(&[0, -1]));
+        x.sort_cons();
+        assert!(x.verify(&mem));
+    }
+
+
+    #[test]
+    fn max_test() {
+        let mut x = ConstraintSystem::new();
+        let input = x.mem.alloc(&[5]);
+        let max = x.mem.alloc(&[1]);
+        let output = x.mem.alloc(&[1]);
+        x.is_max(input, x.mem[max].begin(), x.mem[output].begin(), 10);
+        x.reorder_for_spartan(&[input]);
+        let mut mem = x.mem.new_memory();
+        x.load_memory(input, &mut mem,  &slice_to_scalar(&[2,-2,4,3,1]));
+        x.load_memory(max, &mut mem, &slice_to_scalar(&[4]));
+        x.compute(&mut mem);
+        assert_eq!(mem[x.mem[output].begin() as usize], BigScalar::from_i32(1));
+        x.sort_cons();
+        assert!(x.verify(&mem));
+    }
+    #[test]
+    fn max_test_2() {
+        let mut x = ConstraintSystem::new();
+        let input = x.mem.alloc(&[5]);
+        let max = x.mem.alloc(&[1]);
+        let output = x.mem.alloc(&[1]);
+        x.is_max(input, x.mem[max].begin(), x.mem[output].begin(), 10);
+        let mut mem = x.mem.new_memory();
+        x.load_memory(input, &mut mem,  &slice_to_scalar(&[2,-2,4,3,1]));
+        x.load_memory(max, &mut mem, &slice_to_scalar(&[3]));
+        x.compute(&mut mem);
+        assert_eq!(mem[x.mem[output].begin() as usize], BigScalar::from_i32(0));
+        x.sort_cons();
+        assert!(x.verify(&mem));
+    }
+
+    #[test]
+    fn multiplexer_test() {
+        let mut x = ConstraintSystem::new();
+        let input = x.mem.alloc(&[5]);
+        let index = x.mem.alloc(&[1]);
+        let output = x.mem.alloc(&[1]);
+        x.multiplexer(input, x.mem[index].begin(), x.mem[output].begin());
+        x.reorder_for_spartan(&[input]);
+        let mut mem = x.mem.new_memory();
+        x.load_memory(input, &mut mem,  &slice_to_scalar(&[1,3,5,7,9]));
+        x.load_memory(index, &mut mem, &slice_to_scalar(&[3]));
+        x.compute(&mut mem);
+        assert_eq!(mem[x.mem[output].begin() as usize], BigScalar::from_i32(7));
         x.sort_cons();
         assert!(x.verify(&mem));
     }
