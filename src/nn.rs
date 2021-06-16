@@ -1,6 +1,7 @@
 use crate::r1cs::ConstraintSystem;
 use crate::r1cs::{TensorAddress};
 use std::cmp::max;
+use std::path::Path;
 use serde_pickle::from_reader;
 use std::fs::File;
 use std::collections::HashMap;
@@ -92,10 +93,13 @@ pub struct NeuralNetwork {
     commit_open: TensorAddress
 }
 
-pub fn load_dataset(file: &str) -> Vec<Vec<i32>> {
-    let w = File::open(file).unwrap();
-    let data: Vec<Vec<i32>>= from_reader(w).unwrap();
-    data
+pub fn load_dataset(path: &str) -> (Vec<Vec<i32>>, Vec<u8>) {
+    let path = Path::new(path);
+    let f = File::open(path.join("test.pkl")).unwrap();
+    let data: Vec<Vec<i32>>= from_reader(f).unwrap();
+    let f = File::open(path.join("truth.pkl")).unwrap();
+    let truth: Vec<u8>= from_reader(f).unwrap();
+    (data, truth)
 }
 
 
