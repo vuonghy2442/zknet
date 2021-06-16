@@ -155,7 +155,7 @@ impl NeuralNetwork {
             let result = c.mem.alloc(&[1]);
 
             c.multiplexer(fc2_out, c.mem[ground_truth].begin(), c.mem[value].begin());
-            c.is_max(input, c.mem[value].begin(), c.mem[result].begin(), 20);
+            c.is_max(fc2_out, c.mem[value].begin(), c.mem[result].begin(), 20);
             println!("accuracy constraints {}", c.cons_size() - hash_cons);
             c.reorder_for_spartan(&[input, ground_truth, result, hash_output]);
             (result, Some(ground_truth))

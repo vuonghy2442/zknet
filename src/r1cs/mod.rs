@@ -172,7 +172,8 @@ impl ConstraintSystem {
         for (params, r) in self.compute.iter_mut() {
             let pos = match &r {
                 Functions::Sum => 1,
-                Functions::IsMax | Functions::Multiplexer => 4,
+                Functions::IsMax => 4,
+                Functions::Multiplexer => 3,
                 _ => continue
             };
             for data in params[pos..].iter_mut() {
@@ -384,7 +385,7 @@ impl ConstraintSystem {
     }
 
     fn run_multiplexer<T: Scalar>(mem: &MemoryManager, param: &[u32], var_dict: &mut Memory<T>) {
-        if let [input,index_bits, tmp_left, tmp, result] = *param {
+        if let [input,index_bits, tmp, result] = *param {
             let mut start = 0;
             let mut cur_layer = VariableTensorListIter::from_tensor_list(&[mem[input].clone()]);
             let mut size = mem[input].size();
@@ -392,7 +393,6 @@ impl ConstraintSystem {
             for bit in mem[index_bits].iter() {
                 let half_size = size >> 1;
                 let is_odd = (size & 1) == 1;
-                let cur_tmp_left = mem[tmp_left].at(&[Range(start..start + half_size)]);
                 let cur_tmp = if size == 2 {
                     VariableTensor::new_const(result, &[1])
                 } else {
@@ -401,10 +401,9 @@ impl ConstraintSystem {
                 start += half_size;
                 size = (size >> 1) + (size & 1);
 
-                for (left, i) in izip!(cur_tmp_left.iter(), cur_tmp.iter()) {
+                for i in cur_tmp.iter() {
                     let (x, y) = (cur_layer.next().unwrap(), cur_layer.next().unwrap());
-                    var_dict[left as usize] = var_dict[x as usize] * (T::one() - var_dict[bit as usize]);
-                    var_dict[i as usize] = var_dict[y as usize] * var_dict[bit as usize] + var_dict[left as usize];
+                    var_dict[i as usize] = var_dict[y as usize] * var_dict[bit as usize] + var_dict[x as usize] * (T::one() - var_dict[bit as usize]);
                 }
                 cur_layer = if is_odd {
                     VariableTensorListIter::from_tensor_list(&[cur_tmp, VariableTensor::new_const(cur_layer.next().unwrap(), &[1])])
@@ -433,7 +432,6 @@ impl ConstraintSystem {
 
         self.bit_decomposition(index, index_bits, index_sign, index_two_complement, true );
 
-        let tmp_left = self.mem.alloc(&[tmp_size]);
         let tmp = self.mem.alloc(&[tmp_size - 1]);
 
         let mut start = 0;
@@ -442,7 +440,6 @@ impl ConstraintSystem {
         for bit in self.mem[index_bits].iter() {
             let is_odd = (size & 1) == 1;
 
-            let cur_tmp_left = self.mem[tmp_left].at(&[Range(start..start + (size >> 1))]);
             let cur_tmp = if size == 2 {
                 VariableTensor::new_const(result, &[1])
             } else {
@@ -452,18 +449,13 @@ impl ConstraintSystem {
             start += size >> 1;
             size = (size >> 1) + (size & 1);
 
-            for (left, i) in izip!(cur_tmp_left.iter(), cur_tmp.iter()) {
+            for i in cur_tmp.iter() {
                 let (x, y) = (cur_layer.next().unwrap(), cur_layer.next().unwrap());
-                self.a.push((self.n_cons, x, BigScalar::one()));
-                self.b.push((self.n_cons, self.mem.one_var, BigScalar::one()));
-                self.b.push((self.n_cons, bit, -BigScalar::one()));
-                self.c.push((self.n_cons, left, BigScalar::one()));
-                self.n_cons += 1;
-
+                self.a.push((self.n_cons, x, -BigScalar::one()));
                 self.a.push((self.n_cons, y, BigScalar::one()));
                 self.b.push((self.n_cons, bit, BigScalar::one()));
-                self.c.push((self.n_cons, left, -BigScalar::one()));
                 self.c.push((self.n_cons, i, BigScalar::one()));
+                self.c.push((self.n_cons, x, -BigScalar::one()));
                 self.n_cons += 1;
             }
             cur_layer = if is_odd {
@@ -472,7 +464,7 @@ impl ConstraintSystem {
                 VariableTensorListIter::from_tensor_list(&[cur_tmp])
             }
         }
-        self.compute.push((Box::new([input, index_bits, tmp_left, tmp, result]), Functions::Multiplexer));
+        self.compute.push((Box::new([input, index_bits, tmp, result]), Functions::Multiplexer));
     }
 
     pub fn conv2d(&mut self, input: TensorAddress, output: TensorAddress, weight: TensorAddress, bias: Option<(TensorAddress, u32)>) {
