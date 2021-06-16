@@ -7,35 +7,13 @@ use crate::zk;
 use crate::scalar::{slice_to_scalar, to_vec_i32};
 use curve25519_dalek::scalar::Scalar;
 
-
-fn softmax(x: &mut [f64]) {
-    let mut sum = 0f64;
-    for val in x.iter_mut() {
-        *val = val.exp();
-        sum += *val;
-    }
-    for val in x.iter_mut() {
-        *val /= sum;
-    }
-}
-
 fn print_result(result: Vec<Scalar>, hash: Vec<Scalar>, truth: u8) {
     println!("Hash value:");
     for r in hash {
         println!("{:#?}", r);
     }
-    println!("Predicted result:");
-
     let result = to_vec_i32(&result);
-    let mut prob = Vec::new();
-    for (i, &r) in result.iter().enumerate(){
-        println!("Raw {}: {}", i, r);
-        prob.push(r as f64/ 2u32.pow(10) as f64);
-    }
-    softmax(&mut prob);
-    for (i,r) in prob.iter().enumerate() {
-        println!("Prob {}: {}", i, r);
-    }
+    println!("Correct result?: {}", if result[0] == 1 {"yes"} else {"no"});
     println!("Ground truth: {}", truth);
 }
 
@@ -52,9 +30,9 @@ fn do_zk_proof(network: NeuralNetwork, memory: &[Scalar]) {
     }
 }
 
-pub fn zknet_infer() {
+pub fn zknet_accuracy() {
     let mut rng = rand::thread_rng();
-    let network = nn::NeuralNetwork::new(false);
+    let network = nn::NeuralNetwork::new(true);
     let mut memory = network.load_weight::<Scalar>("params/params.pkl");
     let (dataset, truth) = nn::load_dataset("dataset");
     print!("Done loading! Enter sample id: ");
@@ -66,7 +44,7 @@ pub fn zknet_infer() {
     let commit_open = Scalar::random(&mut rng);
     println!("Generate random commit open: {:#?}", commit_open);
 
-    let (result, hash) = network.run(&mut memory, &slice_to_scalar(&dataset[x]), None, &[commit_open], true);
+    let (result, hash) = network.run(&mut memory, &slice_to_scalar(&dataset[x]), Some(Scalar::from(truth[x])), &[commit_open], true);
 
     print_result(result, hash, truth[x]);
     do_zk_proof(network, &memory);

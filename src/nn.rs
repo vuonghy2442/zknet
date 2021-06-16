@@ -157,13 +157,14 @@ impl NeuralNetwork {
             c.multiplexer(fc2_out, c.mem[ground_truth].begin(), c.mem[value].begin());
             c.is_max(input, c.mem[value].begin(), c.mem[result].begin(), 20);
             println!("accuracy constraints {}", c.cons_size() - hash_cons);
+            c.reorder_for_spartan(&[input, ground_truth, result, hash_output]);
             (result, Some(ground_truth))
         } else {
+            c.reorder_for_spartan(&[input, fc2_out, hash_output]);
             (fc2_out, None)
         };
-
-        c.reorder_for_spartan(&[input, fc2_out, hash_output]);
         c.sort_cons();
+
         println!("Constraints {}", c.cons_size());
 
         let weight_map: HashMap<String, TensorAddress> = hashmap!{
@@ -181,7 +182,7 @@ impl NeuralNetwork {
             cons: c,
             weight_map,
             input,
-            output: fc2_out,
+            output,
             ground_truth,
             commit_hash: hash_output,
             commit_open
@@ -205,8 +206,15 @@ impl NeuralNetwork {
         return self.cons.get_spartan_instance();
     }
 
-    pub fn run<T: Scalar>(&self, var_dict: &mut [T], input: &[T], commit_open: &[T], verify: bool) -> (Vec<T>, Vec<T>) {
+    pub fn run<T: Scalar>(&self, var_dict: &mut [T], input: &[T], ground_truth: Option<T>, commit_open: &[T], verify: bool) -> (Vec<T>, Vec<T>) {
         self.cons.load_memory(self.input, var_dict, input);
+
+        if let Some(t) = ground_truth {
+            self.cons.load_memory(self.ground_truth.unwrap(), var_dict, &[t]);
+        } else {
+            assert_eq!(self.ground_truth, None);
+        }
+
         self.cons.load_memory(self.commit_open, var_dict, commit_open);
         self.cons.compute(var_dict);
 

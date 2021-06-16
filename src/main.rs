@@ -4,7 +4,21 @@ mod nn;
 mod zk;
 mod scalar;
 mod infer;
+mod accuracy;
+
+use std::io;
+use std::io::Write;
 
 fn main() {
-    infer::zknet_infer();
+    print!("Choose mode (infer/accuracy): ");
+    io::stdout().flush().unwrap();
+    let mut x: String = String::new();
+    io::stdin().read_line(&mut x).expect("Failed to get console input");
+
+    match x.trim(){
+        "infer" => infer::zknet_infer(),
+        "accuracy" => accuracy::zknet_accuracy(),
+        _ => {}
+    }
+
 }
