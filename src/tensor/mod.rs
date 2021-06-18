@@ -1,6 +1,8 @@
 use std::iter::Iterator;
 use std::ops::{Range, RangeFrom, RangeTo};
 
+use itertools::Itertools;
+
 pub enum TensorIndex {
     Range(Range<u32>),
     RangeFrom(RangeFrom<u32>),
@@ -226,6 +228,10 @@ impl VariableTensor {
             idx: Vec::new(),
             val_next: self.start as i32
         }
+    }
+
+    pub fn to_vec(&self) -> Vec<u32> {
+        self.iter().collect_vec()
     }
 }
 

@@ -8,7 +8,7 @@ use std::fs::File;
 use std::io::Write;
 use curve25519_dalek::scalar::Scalar;
 
-pub fn prove_nizk(network: nn::NeuralNetwork, memory: &[Scalar]) {
+pub fn prove_nizk(network: &nn::NeuralNetwork, memory: &[Scalar]) {
     let (inst, num_cons, num_vars, num_inputs,_) = network.get_spartan_instance();
     let gens = NIZKGens::new(num_cons, num_vars, num_inputs);
 
@@ -53,7 +53,7 @@ pub fn prove_nizk(network: nn::NeuralNetwork, memory: &[Scalar]) {
 }
 
 
-pub fn prove_zk_snark(network: nn::NeuralNetwork, memory: &[Scalar]) {
+pub fn prove_zk_snark(network: &nn::NeuralNetwork, memory: &[Scalar]) {
     let (inst, num_cons, num_vars, num_inputs,non_zero) = network.get_spartan_instance();
     let gens = SNARKGens::new(num_cons, num_vars, num_inputs,non_zero);
     let (comm, decomm) = SNARK::encode(&inst, &gens);

@@ -39,7 +39,7 @@ fn print_result(result: Vec<Scalar>, hash: Vec<Scalar>, truth: u8) {
     println!("Ground truth: {}", truth);
 }
 
-fn do_zk_proof(network: NeuralNetwork, memory: &[Scalar]) {
+fn do_zk_proof(network: &NeuralNetwork, memory: &[Scalar]) {
     print!("Proof type (nizk/snark/none): ");
     io::stdout().flush().unwrap();
     let mut x: String = String::new();
@@ -52,7 +52,7 @@ fn do_zk_proof(network: NeuralNetwork, memory: &[Scalar]) {
     }
 }
 
-pub fn zknet_infer() {
+pub fn zknet_infer(verify: bool) {
     let mut rng = rand::thread_rng();
     let network = nn::NeuralNetwork::new(false);
     let mut memory = network.load_weight::<Scalar>("params/params.pkl");
@@ -64,10 +64,10 @@ pub fn zknet_infer() {
     let x = x.trim().parse::<usize>().expect("Failed to parse int");
 
     let commit_open = Scalar::random(&mut rng);
-    println!("Generate random commit open: {:#?}", commit_open);
+    println!("Generate random commit open (private): {:#?}", commit_open);
 
-    let (result, hash) = network.run(&mut memory, &slice_to_scalar(&dataset[x]), None, &[commit_open], true);
+    let (result, hash) = network.run(&mut memory, &slice_to_scalar(&dataset[x]), None, &[commit_open], verify);
 
     print_result(result, hash, truth[x]);
-    do_zk_proof(network, &memory);
+    do_zk_proof(&network, &memory);
 }

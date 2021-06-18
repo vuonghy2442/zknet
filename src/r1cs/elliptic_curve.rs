@@ -1,4 +1,4 @@
-use std::usize;
+use std::{convert::TryInto, usize};
 
 use crate::{r1cs::Functions, tensor::VariableTensor};
 
@@ -6,6 +6,7 @@ use super::{BigScalar, ConstraintSystem, ScalarAddress, Scalar, Memory, MemoryMa
 
 // we use a selected curve of y^2 = x^3 + 16x + 289 (mod p) where p = 0x1000000000000000000000000000000014def9dea2f79cd65812631a5cf5d3ed
 // this curve have a montgomery form y^2 = x^3 + M x^2 + x where M = 4755651596668048722525231845714201167747526728278866922525026204640692435799
+// and also equivalent to twisted edward curve a 2x^2 + y^2 = 1 + d x^2 y^2, where d = 517294763076654096429030487489053192595310804333832478604656664245379939108
 // this curve is selected so that it satisfies the requirements in http://safecurves.cr.yp.to/index.html and has small cofactor
 // this curve has order of 2^3 * 904625697166532776746648320380374280092004119092104366837763295296274715673
 const ORDER_BIT: u32 = 249;
@@ -14,257 +15,371 @@ pub fn get_m<T: Scalar>() -> T {
     T::from_bytes([87, 123, 68, 2, 238, 149, 233, 82, 35, 161, 81, 88, 28, 174, 212, 151, 98, 29, 169, 139, 111, 74, 111, 121, 241, 103, 100, 135, 121, 154, 131, 10])
 }
 
-impl ConstraintSystem {
-    fn run_elliptic_add<T: Scalar>(a: &[ScalarAddress], b: &[ScalarAddress], diff: &[ScalarAddress], temp: &[ScalarAddress], res: &[ScalarAddress],  var_dict: &mut Memory<T>) {
-        var_dict[temp[0] as usize] = (var_dict[a[0] as usize] - var_dict[a[1] as usize]) * (var_dict[b[0] as usize] + var_dict[b[1] as usize]);
-        var_dict[temp[1] as usize] = (var_dict[a[0] as usize] + var_dict[a[1] as usize]) * (var_dict[b[0] as usize] - var_dict[b[1] as usize]);
-        let t = var_dict[temp[0] as usize] + var_dict[temp[1] as usize];
-        var_dict[res[0] as usize] = t * t;
+pub fn get_a<T: Scalar>() -> T {
+    T::from_i32(2)
+}
 
-        let t = var_dict[temp[0] as usize] - var_dict[temp[1] as usize];
-        var_dict[temp[2] as usize] = t * t;
-        var_dict[res[1] as usize] = var_dict[temp[2] as usize] * var_dict[diff[0] as usize];
+pub fn get_order<T: Scalar>() -> T{
+    const ORDER: [u8; 32] = [25, 84, 226, 59, 134, 71, 177, 159, 112, 237, 66, 73, 32, 229, 56, 247, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 1];
+    T::from_bytes(ORDER)
+}
+
+pub fn get_d<T: Scalar>() -> T {
+    T::from_bytes([36, 59, 66, 145, 125, 35, 169, 74, 160, 137, 100, 246, 125, 103, 5, 66, 108, 83, 128, 144, 142, 217, 180, 82, 206, 53, 82, 43, 73, 199, 36, 1] )
+}
+
+pub fn elliptic_add<T: Scalar>(a: &[T], b: &[T], param_a: T, param_d: T) -> [T; 2] {
+    let (t0,t1,t2,t3) = (a[0] * b[1],a[1]*b[0], a[1]*b[1], a[0]*b[0] * param_a);
+    let t4 = t0 * t1 * param_d;
+    [
+        (t0 + t1) * (T::one() + t4).invert(),
+        (t2 - t3) * (T::one() - t4).invert()
+    ]
+}
+
+pub fn elliptic_mul<T: Scalar>(a: &[T], scalar: T, param_a: T, param_d: T) -> [T; 2] {
+    let bytes = scalar.to_bytes();
+    let mut base: [T;2] = a.try_into().unwrap();
+    let mut sum = [T::zero(), T::one()];
+    for i in 0..ORDER_BIT {
+        let bit = (bytes[(i / 8) as usize] >> i % 8) & 1;
+        if bit == 1{
+            sum = elliptic_add(&sum, &base, param_a, param_d);
+        }
+        base = elliptic_add(&base, &base, param_a, param_d);
+    };
+    sum
+}
+
+impl ConstraintSystem {
+    fn run_elliptic_add<T: Scalar>(a: &[ScalarAddress], b: &[ScalarAddress], temp: &[ScalarAddress], res: &[ScalarAddress], param_a: T, param_d: T,  var_dict: &mut Memory<T>) {
+        // temp[0] = a[0] * b[1]
+        var_dict[temp[0] as usize] = var_dict[a[0] as usize] * var_dict[b[1] as usize];
+        // temp[1] = a[1] * b[0]
+        var_dict[temp[1] as usize] = var_dict[a[1] as usize] * var_dict[b[0] as usize];
+        // temp[2] = a[1] * b[1]
+        var_dict[temp[2] as usize] = var_dict[a[1] as usize] * var_dict[b[1] as usize];
+        // temp[3] = param_a*a[0] * b[0]
+        var_dict[temp[3] as usize] = var_dict[a[0] as usize] * var_dict[b[0] as usize] * param_a;
+        // temp[4] = temp[0] * temp[1] * d
+        var_dict[temp[4] as usize] = var_dict[temp[0] as usize] * var_dict[temp[1] as usize] * param_d;
+        // res[0] = (temp[0] + temp[1])/(1+temp[4])
+        var_dict[res[0] as usize] = (var_dict[temp[0] as usize] + var_dict[temp[1] as usize]) * (T::one() + var_dict[temp[4] as usize]).invert();
+        // res[1] = (temp[2] - temp[3])/(1-temp[4])
+        var_dict[res[1] as usize] = (var_dict[temp[2] as usize] - var_dict[temp[3] as usize]) * (T::one() - var_dict[temp[4] as usize]).invert();
     }
 
-    // temp with size of three
-    fn elliptic_add(&mut self, a: &[ScalarAddress], b: &[ScalarAddress], diff: ScalarAddress, temp: &[ScalarAddress], res: &[ScalarAddress]) {
-        // tmp[0] = (a[0] - a[1]) * (b[0] + b[1])
+    // temp with size of five
+    fn elliptic_add(&mut self, a: &[ScalarAddress], b: &[ScalarAddress], temp: &[ScalarAddress], res: &[ScalarAddress], param_a: BigScalar, param_d: BigScalar) {
+        // temp[0] = a[0] * b[1]
         self.a.push((self.n_cons, a[0], BigScalar::one()));
-        self.a.push((self.n_cons, a[1], -BigScalar::one()));
-        self.b.push((self.n_cons, b[0], BigScalar::one()));
         self.b.push((self.n_cons, b[1], BigScalar::one()));
         self.c.push((self.n_cons, temp[0], BigScalar::one()));
         self.n_cons += 1;
-
-        // tmp[1] = (a[0] + a[1]) * (b[0] - b[1])
-        self.a.push((self.n_cons, a[0], BigScalar::one()));
+        // temp[1] = a[1] * b[0]
         self.a.push((self.n_cons, a[1], BigScalar::one()));
         self.b.push((self.n_cons, b[0], BigScalar::one()));
-        self.b.push((self.n_cons, b[1], -BigScalar::one()));
         self.c.push((self.n_cons, temp[1], BigScalar::one()));
         self.n_cons += 1;
-
-        // res[0] == (temp[0] + temp[1])^2
-        self.a.push((self.n_cons, temp[0], BigScalar::one()));
-        self.a.push((self.n_cons, temp[1], BigScalar::one()));
-        self.b.push((self.n_cons, temp[0], BigScalar::one()));
-        self.b.push((self.n_cons, temp[1], BigScalar::one()));
-        self.c.push((self.n_cons, res[0], BigScalar::one()));
-        self.n_cons += 1;
-
-        // temp[2] == (temp[0] - temp[1])^2
-        self.a.push((self.n_cons, temp[0], BigScalar::one()));
-        self.a.push((self.n_cons, temp[1], -BigScalar::one()));
-        self.b.push((self.n_cons, temp[0], BigScalar::one()));
-        self.b.push((self.n_cons, temp[1], -BigScalar::one()));
+        // temp[2] = a[1] * b[1]
+        self.a.push((self.n_cons, a[1], BigScalar::one()));
+        self.b.push((self.n_cons, b[1], BigScalar::one()));
         self.c.push((self.n_cons, temp[2], BigScalar::one()));
         self.n_cons += 1;
-
-        // res[1] = diff[0] * temp[2]
-        self.a.push((self.n_cons, temp[2], BigScalar::one()));
-        self.b.push((self.n_cons, diff, BigScalar::one()));
-        self.c.push((self.n_cons, res[1], BigScalar::one()));
+        // temp[3] = param_a*a[0] * b[0]
+        self.a.push((self.n_cons, a[0], param_a));
+        self.b.push((self.n_cons, b[0], BigScalar::one()));
+        self.c.push((self.n_cons, temp[3], BigScalar::one()));
+        self.n_cons += 1;
+        // temp[4] = temp[0] * temp[1] * d
+        self.a.push((self.n_cons, temp[0], param_d));
+        self.b.push((self.n_cons, temp[1], BigScalar::one()));
+        self.c.push((self.n_cons, temp[4], BigScalar::one()));
+        self.n_cons += 1;
+        // res[0] = (temp[0] + temp[1])/(1+temp[4])
+        self.a.push((self.n_cons, res[0], BigScalar::one()));
+        self.b.push((self.n_cons, self.mem.one_var, BigScalar::one()));
+        self.b.push((self.n_cons, temp[4], BigScalar::one()));
+        self.c.push((self.n_cons, temp[0], BigScalar::one()));
+        self.c.push((self.n_cons, temp[1], BigScalar::one()));
+        self.n_cons += 1;
+        // res[1] = (temp[2] - temp[3])/(1-temp[4])
+        self.a.push((self.n_cons, res[1], BigScalar::one()));
+        self.b.push((self.n_cons, self.mem.one_var, BigScalar::one()));
+        self.b.push((self.n_cons, temp[4], -BigScalar::one()));
+        self.c.push((self.n_cons, temp[2], BigScalar::one()));
+        self.c.push((self.n_cons, temp[3], -BigScalar::one()));
         self.n_cons += 1;
     }
 
-    fn run_elliptic_double<T: Scalar>(a: &[ScalarAddress], temp: &[ScalarAddress], res: &[ScalarAddress], m: T,  var_dict: &mut Memory<T>) {
-        // temp[0] = (a[0] + a[1])^2
-        let t = var_dict[a[0] as usize] + var_dict[a[1] as usize];
-        var_dict[temp[0] as usize] = t * t;
-        // temp[1] = (a[0] - a[1])^2
-        let t = var_dict[a[0] as usize] - var_dict[a[1] as usize];
-        var_dict[temp[1] as usize] = t * t;
-
-        // res[0] = temp[0] * temp[1]
-        var_dict[res[0] as usize] = var_dict[temp[0] as usize] * var_dict[temp[1] as usize];
-
-        // res[1] = (temp[0] - temp[1]) * (temp[1] + (M + 2)/4 * (temp[0] - temp[1]))
-        let t =  var_dict[temp[0] as usize] - var_dict[temp[1] as usize];
-        var_dict[res[1] as usize] = t * (var_dict[temp[1] as usize] + (m + T::from_i32(2))*T::from_i32(4).invert() * t);
+    fn run_elliptic_double<T: Scalar>(a: &[ScalarAddress], temp: &[ScalarAddress], res: &[ScalarAddress], param_a: T,  var_dict: &mut Memory<T>) {
+        // temp[0] = a[0] * a[1]
+        var_dict[temp[0] as usize] = var_dict[a[0] as usize] * var_dict[a[1] as usize];
+        // temp[1] = param_a * a[0] * a[0]
+        var_dict[temp[1] as usize] = var_dict[a[0] as usize] * var_dict[a[0] as usize] * param_a;
+        // temp[2] = a[1] * a[1]
+        var_dict[temp[2] as usize] = var_dict[a[1] as usize] * var_dict[a[1] as usize];
+        // res[0] = 2 * temp[0] / (temp[1] + temp[2])
+        let sum = var_dict[temp[1] as usize] + var_dict[temp[2] as usize];
+        var_dict[res[0] as usize] = T::from_i32(2) * var_dict[temp[0] as usize] * sum.invert();
+        // res[1] = (temp[1] - temp[2]) / (temp[1] + temp[2] - 2)
+        var_dict[res[1] as usize] = (var_dict[temp[1] as usize] - var_dict[temp[2] as usize]) * (sum - T::from_i32(2)).invert();
     }
 
     // temp should have size of two
-    fn elliptic_double(&mut self, a: &[ScalarAddress], temp: &[ScalarAddress], res: &[ScalarAddress], m: BigScalar) {
-        // temp[0] = (a[0] + a[1])^2
+    fn elliptic_double(&mut self, a: &[ScalarAddress], temp: &[ScalarAddress], res: &[ScalarAddress], param_a: BigScalar) {
+        // temp[0] = a[0] * a[1]
         self.a.push((self.n_cons, a[0], BigScalar::one()));
-        self.a.push((self.n_cons, a[1], BigScalar::one()));
-        self.b.push((self.n_cons, a[0], BigScalar::one()));
         self.b.push((self.n_cons, a[1], BigScalar::one()));
         self.c.push((self.n_cons, temp[0], BigScalar::one()));
         self.n_cons += 1;
-        // temp[1] = (a[0] - a[1])^2
-        self.a.push((self.n_cons, a[0], BigScalar::one()));
-        self.a.push((self.n_cons, a[1], -BigScalar::one()));
+        // temp[1] = param_a * a[0] * a[0]
+        self.a.push((self.n_cons, a[0], param_a));
         self.b.push((self.n_cons, a[0], BigScalar::one()));
-        self.b.push((self.n_cons, a[1], -BigScalar::one()));
         self.c.push((self.n_cons, temp[1], BigScalar::one()));
         self.n_cons += 1;
-        // res[0] = temp[0] * temp[1]
-        self.a.push((self.n_cons, temp[0], BigScalar::one()));
-        self.b.push((self.n_cons, temp[1], BigScalar::one()));
-        self.c.push((self.n_cons, res[0], BigScalar::one()));
+        // temp[2] = a[1] * a[1]
+        self.a.push((self.n_cons, a[1], BigScalar::one()));
+        self.b.push((self.n_cons, a[1], BigScalar::one()));
+        self.c.push((self.n_cons, temp[2], BigScalar::one()));
         self.n_cons += 1;
-        // res[1] = (temp[0] - temp[1]) * (temp[1] + (M + 2)/4 * (temp[0] - temp[1]))
-        // =  (temp[0] - temp[1]) * ((2 - M)/4 * temp[1] + (M + 2)/4 * temp[0])
-        self.a.push((self.n_cons, temp[0], BigScalar::one()));
-        self.a.push((self.n_cons, temp[1], -BigScalar::one()));
-        self.b.push((self.n_cons, temp[0], (BigScalar::from(2u8) + m)*BigScalar::from(4u8).invert()));
-        self.b.push((self.n_cons, temp[1], (BigScalar::from(2u8) - m)*BigScalar::from(4u8).invert()));
-        self.c.push((self.n_cons, res[1], BigScalar::one()));
+        // res[0] = 2 * temp[0] / (temp[1] + temp[2])
+        self.a.push((self.n_cons, res[0], BigScalar::one()));
+        self.b.push((self.n_cons, temp[1], BigScalar::one()));
+        self.b.push((self.n_cons, temp[2], BigScalar::one()));
+        self.c.push((self.n_cons, temp[0], BigScalar::from_i32(2)));
+        self.n_cons += 1;
+        // res[1] = (temp[1] - temp[2]) / (temp[1] + temp[2] - 2)
+        self.a.push((self.n_cons, res[1], BigScalar::one()));
+        self.b.push((self.n_cons, temp[1], BigScalar::one()));
+        self.b.push((self.n_cons, temp[2], BigScalar::one()));
+        self.b.push((self.n_cons, self.mem.one_var, BigScalar::from_i32(-2)));
+        self.c.push((self.n_cons, temp[1], BigScalar::one()));
+        self.c.push((self.n_cons, temp[2], -BigScalar::one()));
         self.n_cons += 1;
     }
 
     pub(super) fn run_elliptic_mul<T: Scalar>(mem: &MemoryManager, param: &[u32], var_dict: &mut Memory<T>) {
-        let m = T::slice_u32_to_scalar(&param[..8]);
-        if let [bits, tmp, a, res] = param[8..] {
+        let param_a = T::slice_u32_to_scalar(&param[..8]);
+        let param_d = T::slice_u32_to_scalar(&param[8..16]);
+
+        if let [bits, tmp, tmp_last, a0, a1, res0, res1] = param[16..] {
 
             // zero_var
-            let zero_var = mem[tmp].at_idx(&[0,1]);
+            let zero_var = mem[tmp_last].at_idx(&[7]);
             var_dict[zero_var as usize] = T::zero();
 
-            let diff: [ScalarAddress; 2] = [a, mem.one_var];
+            let mut sum: Vec<ScalarAddress> = vec![zero_var, mem.one_var];
+            let mut base: Vec<ScalarAddress> = vec![a0, a1];
 
-            let mut p: Vec<ScalarAddress> = vec![mem.one_var, zero_var];
-            let mut q: Vec<ScalarAddress> = vec![a, mem.one_var];
-
-            for (i, bit) in mem[bits].reverse(1).iter().enumerate() {
-                let tmp = mem[tmp].at_(&[i as u32]).iter().collect::<Vec<u32>>();
-
-                let res_add = if i > 0 {
-                    let res_add = &tmp[0..2];
-                    Self::run_elliptic_add(&p, &q, &diff, &tmp[2..5], &res_add, var_dict);
-                    res_add.to_vec()
+            for (i, bit) in mem[bits].iter().enumerate() {
+                let last = (i as u32) == ORDER_BIT - 1;
+                let tmp = if last {
+                    mem[tmp_last].clone()
                 } else {
-                    q.clone()
+                    mem[tmp].at_(&[i as u32])
+                }.iter().collect::<Vec<u32>>();
+
+                let res_add = &tmp[5..7];
+                Self::run_elliptic_add(&sum, &base, &tmp[0..5], res_add, param_a, param_d, var_dict);
+
+                let new_sum = if last {
+                    [res0, res1]
+                } else {
+                    tmp[7..9].try_into().unwrap()
                 };
 
-                //double_p 6..8
-                //double_Q 10..12
-                let double_p = &tmp[7..9];
-                let double_q = &tmp[11..13];
-                Self::run_elliptic_double(&p,  &tmp[5..7], &double_p, m, var_dict);
-                Self::run_elliptic_double(&q,  &tmp[9..11], &double_q, m, var_dict);
-
-                // res_P 12..14
-                // res_Q 14..16
-                // bit * tmp
-                let new_p = tmp[13..15].to_vec();
-                let new_q = tmp[15..17].to_vec();
-                // new_p = (1 - bit) * add_point + bit * double_p
-                // new_q = (1 - bit) * double_q + bit * add_point
                 for i in 0..2 {
-                    if var_dict[bit as usize] == T::zero() {
-                        var_dict[new_p[i] as usize] = var_dict[double_p[i] as usize];
-                        var_dict[new_q[i] as usize] = var_dict[res_add[i] as usize];
+                    var_dict[new_sum[i] as usize] = var_dict[if var_dict[bit as usize] == T::zero() {
+                        sum[i]
                     } else {
-                        var_dict[new_p[i] as usize] = var_dict[res_add[i] as usize];
-                        var_dict[new_q[i] as usize] = var_dict[double_q[i] as usize];
-                    }
+                        res_add[i]
+                    } as usize];
                 }
 
-                p = new_p;
-                q = new_q;
-            }
 
-            var_dict[res as usize] = var_dict[p[0] as usize] * var_dict[p[1] as usize].invert();
+                if !last {
+                    let res_double = &tmp[12..14];
+                    Self::run_elliptic_double(&base, &tmp[9..12], res_double, param_a, var_dict);
+                    base = res_double.to_vec();
+                    sum = new_sum.to_vec();
+                }
+            }
         } else {
             panic!("params don't match")
         }
     }
 
-    pub fn elliptic_mul(&mut self, a: ScalarAddress, scalar: ScalarAddress, res: ScalarAddress, m: BigScalar) {
+    pub fn elliptic_mul(&mut self, a: &[ScalarAddress], scalar: ScalarAddress, res: &[ScalarAddress], param_a: BigScalar, param_d: BigScalar) {
         let scalar = self.mem.save(VariableTensor::new_const(scalar, &[1]));
         let bits = self.mem.alloc(&[1, ORDER_BIT]);
         let sign = self.mem.alloc(&[1]);
         let two_complement = self.mem.alloc(&[1]);
         self.bit_decomposition(scalar, bits, sign, two_complement, true);
 
-        let tmp = self.mem.alloc(&[ORDER_BIT, 17]);
+        let tmp = self.mem.alloc(&[ORDER_BIT, 14]);
+        let tmp_last = self.mem.alloc(&[8]);
 
         // zero_var
-        let zero_var = self.mem[tmp].at_idx(&[0,1]);
+        let zero_var = self.mem[tmp_last].at_idx(&[7]);
         self.c.push((self.n_cons, zero_var, BigScalar::one()));
         self.n_cons += 1;
 
-        let mut p: Vec<ScalarAddress> = vec![self.mem.one_var, zero_var];
-        let mut q: Vec<ScalarAddress> = vec![a, self.mem.one_var];
+        let mut sum: Vec<ScalarAddress> = vec![zero_var, self.mem.one_var];
+        let mut base: Vec<ScalarAddress> = a.to_vec();
 
-        for (i, bit) in self.mem[bits].reverse(1).iter().enumerate() {
-            let tmp = self.mem[tmp].at_(&[i as u32]).iter().collect::<Vec<u32>>();
-
-            let res_add = if i > 0 {
-                let res_add = &tmp[0..2];
-                self.elliptic_add(&p, &q, a, &tmp[2..5], &res_add);
-                res_add.to_vec()
+        for (i, bit) in self.mem[bits].iter().enumerate() {
+            let last = (i as u32) == ORDER_BIT - 1;
+            let tmp = if last {
+                self.mem[tmp_last].clone()
             } else {
-                q.to_owned()
+                self.mem[tmp].at_(&[i as u32])
+            }.to_vec();
+
+            let res_add = &tmp[5..7];
+            self.elliptic_add(&sum, &base, &tmp[0..5], res_add, param_a, param_d);
+
+            let new_sum = if last {
+                &res
+            } else {
+                &tmp[7..9]
             };
 
-            //double_p 6..8
-            //double_Q 10..12
-            let double_p = &tmp[7..9];
-            let double_q = &tmp[11..13];
-            self.elliptic_double(&p,  &tmp[5..7], &double_p, m);
-            self.elliptic_double(&q,  &tmp[9..11], &double_q, m);
-
-            // res_P 12..14
-            // res_Q 14..16
-            // bit * tmp
-            let new_p = tmp[13..15].to_vec();
-            let new_q = tmp[15..17].to_vec();
-            // new_p = (1 - bit) * add_point + bit * double_p
-            // new_q = (1 - bit) * double_q + bit * add_point
             for i in 0..2 {
                 self.a.push((self.n_cons, bit, BigScalar::one()));
-                self.b.push((self.n_cons, double_p[i], -BigScalar::one()));
+                self.b.push((self.n_cons, sum[i], -BigScalar::one()));
                 self.b.push((self.n_cons, res_add[i], BigScalar::one()));
-                self.c.push((self.n_cons, new_p[i], BigScalar::one()));
-                self.c.push((self.n_cons, double_p[i], -BigScalar::one()));
-                self.n_cons += 1;
-
-                self.a.push((self.n_cons, bit, BigScalar::one()));
-                self.b.push((self.n_cons, res_add[i], -BigScalar::one()));
-                self.b.push((self.n_cons, double_q[i], BigScalar::one()));
-                self.c.push((self.n_cons, new_q[i], BigScalar::one()));
-                self.c.push((self.n_cons, res_add[i], -BigScalar::one()));
+                self.c.push((self.n_cons, new_sum[i], BigScalar::one()));
+                self.c.push((self.n_cons, sum[i], -BigScalar::one()));
                 self.n_cons += 1;
             }
-            p = new_p;
-            q = new_q;
+
+            if !last {
+                let res_double = &tmp[12..14];
+                self.elliptic_double(&base, &tmp[9..12], res_double, param_a);
+                base = res_double.to_vec();
+                sum = new_sum.to_vec();
+            }
         }
 
-        // final result
-        // res = p[0]/p[1]
-        self.a.push((self.n_cons, res, BigScalar::one()));
-        self.b.push((self.n_cons, p[1], BigScalar::one()));
-        self.c.push((self.n_cons, p[0], BigScalar::one()));
-        self.n_cons += 1;
+        let mut params: Vec<u32> = Vec::new();
+        params.extend_from_slice(&scalar_to_vec_u32(param_a));
+        params.extend_from_slice(&scalar_to_vec_u32(param_d));
+        params.extend([bits, tmp, tmp_last, a[0], a[1], res[0], res[1]]);
+        self.compute.push((params.into_boxed_slice(), Functions::EllipticMul));
+    }
+
+    pub(super) fn run_elliptic_add_cond<T: Scalar>(mem: &MemoryManager, param: &[u32], var_dict: &mut Memory<T>) {
+        let param_a = T::slice_u32_to_scalar(&param[..8]);
+        let param_d = T::slice_u32_to_scalar(&param[8..16]);
+        if let [tmp, cond, a0, a1, b0, b1, res0, res1] = param[16..] {
+            let tmp = &mem[tmp].to_vec();
+            let res = [res0, res1];
+            let a = [a0, a1];
+            let b = [b0, b1];
+            Self::run_elliptic_add(&a, &b, &tmp[..5], &tmp[5..7], param_a, param_d, var_dict);
+
+            for i in 0..2 {
+                var_dict[res[i] as usize] = var_dict[if var_dict[cond as usize] == T::zero() {
+                    a[i]
+                } else {
+                    tmp[5+i]
+                } as usize];
+            }
+
+        } else {
+            panic!("params don't match");
+        }
+    }
+
+    // return a + b if cond == 1 otherwise return a
+    pub fn elliptic_add_cond(&mut self, a: &[ScalarAddress], b: &[ScalarAddress], res: &[ScalarAddress], cond: ScalarAddress, param_a: BigScalar, param_d: BigScalar) {
+        let tmp = self.mem.alloc(&[7]);
+        let tmp_tensor = self.mem[tmp].to_vec();
+        let sum = &tmp_tensor[5..7];
+        self.elliptic_add(a, b, &tmp_tensor[0..5], &sum, param_a, param_d);
+
+        for i in 0..2 {
+            self.a.push((self.n_cons, cond, BigScalar::one()));
+            self.b.push((self.n_cons, a[i], -BigScalar::one()));
+            self.b.push((self.n_cons, sum[i], BigScalar::one()));
+            self.c.push((self.n_cons, res[i], BigScalar::one()));
+            self.c.push((self.n_cons, a[i], -BigScalar::one()));
+            self.n_cons += 1;
+        }
 
         let mut params: Vec<u32> = Vec::new();
-        params.extend_from_slice(&scalar_to_vec_u32(m));
-        params.extend([bits, tmp, a, res]);
-
-        self.compute.push((params.into_boxed_slice(), Functions::EllipticMul));
+        params.extend_from_slice(&scalar_to_vec_u32(param_a));
+        params.extend_from_slice(&scalar_to_vec_u32(param_d));
+        params.extend([tmp, cond, a[0], a[1], b[0], b[1], res[0], res[1]]);
+        self.compute.push((params.into_boxed_slice(), Functions::EllipticAddCond));
     }
 }
 
 #[cfg(test)]
 mod test {
-    use super::{ConstraintSystem, get_m, BigScalar};
-    use crate::scalar::{Scalar, slice_to_scalar};
+    use super::{ConstraintSystem, get_a, get_d, BigScalar};
+    use crate::scalar::Scalar;
     #[test]
     fn elliptic_mul_test() {
         let mut x = ConstraintSystem::new();
-        let input = x.mem.alloc(&[1]);
+        let input = x.mem.alloc(&[2]);
         let scalar = x.mem.alloc(&[1]);
-        let output = x.mem.alloc(&[1]);
-        x.elliptic_mul(x.mem[input].begin(), x.mem[scalar].begin(), x.mem[output].begin(), get_m());
+        let _output = x.mem.alloc(&[2]);
+        x.elliptic_mul(&[1,2], 3, &[4,5], get_a(), get_d());
         x.reorder_for_spartan(&[input]);
         let mut mem = x.mem.new_memory();
-        x.load_memory(input, &mut mem,  &slice_to_scalar(&[15]));
-        x.load_memory(scalar, &mut mem, &slice_to_scalar(&[4172382]));
+        println!("Number of constraints {}", x.cons_size());
+        x.load_memory(input, &mut mem,  &[BigScalar::from_bytes([165, 69, 15, 204, 207, 113, 207, 38, 62, 63, 78, 98, 124, 5, 127, 19, 227, 172, 104, 57, 76, 114, 16, 216, 22, 108, 66, 159, 246, 205, 84, 4]), BigScalar::from_bytes([117, 164, 25, 122, 240, 125, 11, 247, 5, 194, 218, 37, 43, 92, 11, 13, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 10]) ]);
+        x.load_memory(scalar, &mut mem, &[BigScalar::from_bytes([25, 84, 226, 59, 134, 71, 177, 159, 112, 237, 66, 73, 32, 229, 56, 247, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 1])]);
+
         x.compute(&mut mem);
-        assert_eq!(mem[x.mem[output].begin() as usize], BigScalar::from_bytes([152, 47, 223, 157, 227, 139, 208, 148, 2, 16, 252, 104, 235, 119, 218, 230, 77, 92, 187, 45, 81, 241, 255, 149, 155, 239, 10, 94, 196, 84, 11, 13]));
+        assert_eq!(mem[1], BigScalar::from_bytes([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]));
+        assert_eq!(mem[2], BigScalar::from_bytes([1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]));
+
+        x.sort_cons();
+        assert!(x.verify(&mem));
+    }
+    #[test]
+    fn elliptic_add_cond_test() {
+        let mut x = ConstraintSystem::new();
+        let input = x.mem.alloc(&[2]);
+
+        let _output = x.mem.alloc(&[2]);
+        let cond = x.mem.alloc(&[1]);
+        x.elliptic_add_cond(&[1,2], &[1,2], &[3,4], x.mem[cond].begin(), get_a(), get_d());
+        x.reorder_for_spartan(&[input]);
+        let mut mem = x.mem.new_memory();
+        println!("Number of constraints {}", x.cons_size());
+        x.load_memory(input, &mut mem,  &[BigScalar::from_bytes([165, 69, 15, 204, 207, 113, 207, 38, 62, 63, 78, 98, 124, 5, 127, 19, 227, 172, 104, 57, 76, 114, 16, 216, 22, 108, 66, 159, 246, 205, 84, 4]), BigScalar::from_bytes([117, 164, 25, 122, 240, 125, 11, 247, 5, 194, 218, 37, 43, 92, 11, 13, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 10]) ]);
+        x.load_memory(cond, &mut mem, &[BigScalar::from_i32(1)]);
+
+        x.compute(&mut mem);
+        assert_eq!(mem[0], BigScalar::from_bytes([227, 208, 89, 14, 152, 41, 191, 159, 136, 174, 168, 128, 19, 33, 43, 177, 193, 252, 112, 138, 17, 196, 201, 63, 134, 163, 141, 17, 28, 122, 57, 1]));
+        assert_eq!(mem[1], BigScalar::from_bytes([185, 35, 46, 205, 201, 112, 138, 240, 163, 149, 219, 55, 113, 185, 85, 195, 174, 120, 151, 169, 200, 251, 23, 84, 122, 246, 118, 250, 234, 35, 142, 14]));
+
+        x.sort_cons();
+        assert!(x.verify(&mem));
+    }
+
+    #[test]
+    fn elliptic_add_cond_test_2() {
+        let mut x = ConstraintSystem::new();
+        let input = x.mem.alloc(&[2]);
+
+        let _output = x.mem.alloc(&[2]);
+        let cond = x.mem.alloc(&[1]);
+        x.elliptic_add_cond(&[1,2], &[1,2], &[3,4], x.mem[cond].begin(), get_a(), get_d());
+        x.reorder_for_spartan(&[input]);
+        let mut mem = x.mem.new_memory();
+        println!("Number of constraints {}", x.cons_size());
+        x.load_memory(input, &mut mem,  &[BigScalar::from_bytes([165, 69, 15, 204, 207, 113, 207, 38, 62, 63, 78, 98, 124, 5, 127, 19, 227, 172, 104, 57, 76, 114, 16, 216, 22, 108, 66, 159, 246, 205, 84, 4]), BigScalar::from_bytes([117, 164, 25, 122, 240, 125, 11, 247, 5, 194, 218, 37, 43, 92, 11, 13, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 10]) ]);
+        x.load_memory(cond, &mut mem, &[BigScalar::from_i32(0)]);
+
+        x.compute(&mut mem);
+        assert_eq!(mem[0], mem[x.mem[input].to_vec()[0] as usize]);
+        assert_eq!(mem[1], mem[x.mem[input].to_vec()[1] as usize]);
+
         x.sort_cons();
         assert!(x.verify(&mem));
     }

@@ -6,7 +6,7 @@ use serde_pickle::from_reader;
 use std::fs::File;
 use std::collections::HashMap;
 use crate::scalar::Scalar;
-
+use crate::r1cs::elliptic_curve::{get_a, get_d};
 
 macro_rules! hashmap {
     ($( $key: expr => $val: expr ),*) => {{
@@ -83,14 +83,29 @@ fn linear_compact(c: &mut ConstraintSystem, input: TensorAddress, n_feature: u32
     return (if relu {res} else {output}, weight, bias);
 }
 
+struct AccuracyParams {
+    ground_truth: TensorAddress,
+    result_open: TensorAddress,
+    p: TensorAddress,
+    q: TensorAddress
+}
+
 pub struct NeuralNetwork {
     cons: ConstraintSystem,
     weight_map: HashMap<String, TensorAddress>,
     input: TensorAddress,
     output: TensorAddress,
-    ground_truth: Option<TensorAddress>,
     commit_hash: TensorAddress,
-    commit_open: TensorAddress
+    commit_open: TensorAddress,
+
+    acc: Option<AccuracyParams>
+}
+
+pub struct AccuracyCommitment<T: Scalar> {
+    pub ground_truth: T,
+    pub result_open: T,
+    pub p: [T;2],
+    pub q: [T;2],
 }
 
 pub fn load_dataset(path: &str) -> (Vec<Vec<i32>>, Vec<u8>) {
@@ -149,16 +164,30 @@ impl NeuralNetwork {
         println!("packed constraints {}",packed_cons - fc2_cons);
         println!("hash constraints {}",hash_cons - packed_cons);
 
-        let (output, ground_truth) = if accuracy {
+        let (output, acc) = if accuracy {
+            let p = c.mem.alloc(&[2]);
+            let q = c.mem.alloc(&[2]);
+            let result_open = c.mem.alloc(&[1]);
             let ground_truth = c.mem.alloc(&[1]);
             let value = c.mem.alloc(&[1]);
             let result = c.mem.alloc(&[1]);
+            let mul_p = c.mem.alloc(&[2]);
+            let commited_result = c.mem.alloc(&[2]);
+
 
             c.multiplexer(fc2_out, c.mem[ground_truth].begin(), c.mem[value].begin());
             c.is_max(fc2_out, c.mem[value].begin(), c.mem[result].begin(), 20);
+            c.elliptic_mul(&c.mem[p].to_vec(), c.mem[result_open].begin(), &c.mem[mul_p].to_vec(), get_a(), get_d());
+            c.elliptic_add_cond(&c.mem[mul_p].to_vec(), &c.mem[q].to_vec(), &c.mem[commited_result].to_vec(), c.mem[result].begin(), get_a(), get_d());
             println!("accuracy constraints {}", c.cons_size() - hash_cons);
-            c.reorder_for_spartan(&[input, ground_truth, result, hash_output]);
-            (result, Some(ground_truth))
+
+            c.reorder_for_spartan(&[input, ground_truth, commited_result, hash_output, p, q]);
+            (commited_result, Some(AccuracyParams{
+                ground_truth,
+                result_open,
+                p,
+                q
+            }))
         } else {
             c.reorder_for_spartan(&[input, fc2_out, hash_output]);
             (fc2_out, None)
@@ -183,9 +212,9 @@ impl NeuralNetwork {
             weight_map,
             input,
             output,
-            ground_truth,
             commit_hash: hash_output,
-            commit_open
+            commit_open,
+            acc
         }
     }
 
@@ -206,13 +235,17 @@ impl NeuralNetwork {
         return self.cons.get_spartan_instance();
     }
 
-    pub fn run<T: Scalar>(&self, var_dict: &mut [T], input: &[T], ground_truth: Option<T>, commit_open: &[T], verify: bool) -> (Vec<T>, Vec<T>) {
+    pub fn run<T: Scalar>(&self, var_dict: &mut [T], input: &[T], accuracy_commitment: Option<AccuracyCommitment<T>>, commit_open: &[T], verify: bool) -> (Vec<T>, Vec<T>) {
         self.cons.load_memory(self.input, var_dict, input);
 
-        if let Some(t) = ground_truth {
-            self.cons.load_memory(self.ground_truth.unwrap(), var_dict, &[t]);
+        if let Some(t) = accuracy_commitment {
+            let acc = self.acc.as_ref().unwrap();
+            self.cons.load_memory(acc.ground_truth, var_dict, &[t.ground_truth]);
+            self.cons.load_memory(acc.result_open, var_dict, &[t.result_open]);
+            self.cons.load_memory(acc.p, var_dict, &t.p);
+            self.cons.load_memory(acc.q, var_dict, &t.q);
         } else {
-            assert_eq!(self.ground_truth, None);
+            assert!(matches!(self.acc, None));
         }
 
         self.cons.load_memory(self.commit_open, var_dict, commit_open);
