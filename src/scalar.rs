@@ -44,6 +44,7 @@ pub trait Scalar: Debug + std::ops::Mul<Self, Output=Self> + std::ops::MulAssign
     fn slice_u32_to_scalar(x: &[u32]) -> Self;
     fn to_i32(&self) -> i32;
     fn from_bytes(data: [u8;32]) -> Self;
+    fn invert(&self) -> Self;
 }
 
 fn pack_four_bytes(x : &[u8]) -> u32 {
@@ -110,6 +111,9 @@ impl Scalar for i32 {
     fn from_bytes(data: [u8;32]) -> Self {
         return pack_four_bytes(&data[0..4]) as i32;
     }
+    fn invert(&self) -> Self {
+        panic!("not implemented");
+    }
 }
 
 impl Scalar for BigScalar {
@@ -143,5 +147,9 @@ impl Scalar for BigScalar {
     }
     fn from_bytes(data: [u8;32]) -> Self {
         return BigScalar::from_bits(data);
+    }
+    fn invert(&self) -> Self {
+        assert_ne!(self, &Self::zero());
+        self.invert()
     }
 }

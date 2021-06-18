@@ -9,6 +9,7 @@ use curve25519_dalek::scalar::Scalar as BigScalar;
 use crate::scalar::{self, SCALAR_SIZE, Scalar, power_of_two, scalar_to_vec_u32};
 
 mod poseidon;
+mod elliptic_curve;
 
 type ScalarAddress = u32;
 pub type TensorAddress = u32;
@@ -16,11 +17,11 @@ pub type TensorAddress = u32;
 type Memory<T> = [T];
 
 pub trait Functional: Sized {
-    const FUNCTIONS: [fn(mem: &MemoryManager, &[u32], &mut [Self]); 13];
+    const FUNCTIONS: [fn(mem: &MemoryManager, &[u32], &mut [Self]); 14];
 }
 
 impl<T:Scalar> Functional for T {
-    const FUNCTIONS: [fn(mem: &MemoryManager, &[u32], &mut [T]); 13] = [
+    const FUNCTIONS: [fn(mem: &MemoryManager, &[u32], &mut [T]); 14] = [
         ConstraintSystem::run_sum::<T>,
         ConstraintSystem::run_mul::<T>,
         ConstraintSystem::run_decompose::<T>,
@@ -34,6 +35,7 @@ impl<T:Scalar> Functional for T {
         ConstraintSystem::run_fully_connected_compact::<T>,
         ConstraintSystem::run_is_max::<T>,
         ConstraintSystem::run_multiplexer::<T>,
+        ConstraintSystem::run_elliptic_mul::<T>,
     ];
 }
 
@@ -101,7 +103,8 @@ enum Functions {
     PoseidonHash = 9,
     FCCompact = 10,
     IsMax = 11,
-    Multiplexer = 12
+    Multiplexer = 12,
+    EllipticMul = 13
 }
 
 impl ConstraintSystem {
@@ -174,6 +177,7 @@ impl ConstraintSystem {
                 Functions::Sum => 1,
                 Functions::IsMax => 4,
                 Functions::Multiplexer => 3,
+                Functions::EllipticMul => 10,
                 _ => continue
             };
             for data in params[pos..].iter_mut() {
@@ -509,6 +513,7 @@ impl ConstraintSystem {
                 break
             }
             let x = var_dict[x.unwrap() as usize];
+
             let idx = &iter.idx;
             let bits = mem[output].at_(idx);
             let bits_cnt = bits.size();

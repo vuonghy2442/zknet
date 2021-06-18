@@ -211,7 +211,7 @@ impl ConstraintSystem {
             None);
     }
 
-    pub fn run_poseidon_perm_box<T: Scalar>(mem: &MemoryManager, param: &[u32], var_dict: &mut Memory<T>) {
+    pub(super) fn run_poseidon_perm_box<T: Scalar>(mem: &MemoryManager, param: &[u32], var_dict: &mut Memory<T>) {
         if let [input,output, input_added, temp] = *param {
             for (i, (y,x)) in mem[input_added].iter().zip(mem[input].iter()).enumerate() {
                 var_dict[y as usize] = var_dict[x as usize] + from_hex(constant::ROUND_CONST[i]);
@@ -245,7 +245,7 @@ impl ConstraintSystem {
         self.compute.push((Box::new([input, output, input_added, temp]), Functions::PoseidonPerm))
     }
 
-    pub fn run_poseidon_hash<T: Scalar>(mem: &MemoryManager, param: &[u32], var_dict: &mut Memory<T>) {
+    pub(super) fn run_poseidon_hash<T: Scalar>(mem: &MemoryManager, param: &[u32], var_dict: &mut Memory<T>) {
         if let [input_added, temp_res, temp_val, output, output_rem] = param[..5] {
             let input = &param[5..];
             let mut input_tensor = Vec::new();
