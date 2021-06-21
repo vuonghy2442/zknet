@@ -4,28 +4,22 @@ use crate::{r1cs::Functions, tensor::VariableTensor};
 
 use super::{BigScalar, ConstraintSystem, ScalarAddress, Scalar, Memory, MemoryManager, scalar_to_vec_u32};
 
-// we use a selected curve of y^2 = x^3 + 16x + 289 (mod p) where p = 0x1000000000000000000000000000000014def9dea2f79cd65812631a5cf5d3ed
-// this curve have a montgomery form y^2 = x^3 + M x^2 + x where M = 4755651596668048722525231845714201167747526728278866922525026204640692435799
-// and also equivalent to twisted edward curve a 2x^2 + y^2 = 1 + d x^2 y^2, where d = 517294763076654096429030487489053192595310804333832478604656664245379939108
+// we use a selected an Edwards curve x^2 + y^2 = 1 + 1408 x^2 y^2 (mod p) where p = 0x1000000000000000000000000000000014def9dea2f79cd65812631a5cf5d3ed
 // this curve is selected so that it satisfies the requirements in http://safecurves.cr.yp.to/index.html and has small cofactor
-// this curve has order of 2^3 * 904625697166532776746648320380374280092004119092104366837763295296274715673
-const ORDER_BIT: u32 = 249;
-
-pub fn get_m<T: Scalar>() -> T {
-    T::from_bytes([87, 123, 68, 2, 238, 149, 233, 82, 35, 161, 81, 88, 28, 174, 212, 151, 98, 29, 169, 139, 111, 74, 111, 121, 241, 103, 100, 135, 121, 154, 131, 10])
-}
-
-pub fn get_a<T: Scalar>() -> T {
-    T::from_i32(2)
-}
+// this curve has order of 2^2 * 1809251394333065553493296640760748560224405988559295410502714166441017894153
+const ORDER_BIT: u32 = 251;
 
 pub fn get_order<T: Scalar>() -> T{
-    const ORDER: [u8; 32] = [25, 84, 226, 59, 134, 71, 177, 159, 112, 237, 66, 73, 32, 229, 56, 247, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 1];
+    const ORDER: [u8; 32] = [9, 101, 184, 12, 125, 201, 154, 3, 25, 91, 234, 114, 31, 29, 214, 12, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4];
     T::from_bytes(ORDER)
 }
 
+pub fn get_a<T: Scalar>() -> T {
+    T::one()
+}
+
 pub fn get_d<T: Scalar>() -> T {
-    T::from_bytes([36, 59, 66, 145, 125, 35, 169, 74, 160, 137, 100, 246, 125, 103, 5, 66, 108, 83, 128, 144, 142, 217, 180, 82, 206, 53, 82, 43, 73, 199, 36, 1] )
+    T::from_i32(1408)
 }
 
 pub fn elliptic_add<T: Scalar>(a: &[T], b: &[T], param_a: T, param_d: T) -> [T; 2] {
