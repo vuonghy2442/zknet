@@ -8,6 +8,9 @@ use std::usize;
 use curve25519_dalek::scalar::Scalar as BigScalar;
 use crate::scalar::{self, SCALAR_SIZE, Scalar, power_of_two, scalar_to_vec_u32};
 
+mod conv2d_compact;
+mod conv2d_padded_compact;
+mod fully_connected_compact;
 mod poseidon;
 pub mod elliptic_curve;
 
@@ -476,9 +479,9 @@ impl ConstraintSystem {
 
     pub fn conv2d(&mut self, input: TensorAddress, output: TensorAddress, weight: TensorAddress, bias: Option<(TensorAddress, u32)>) {
         let fout = self.mem[weight].dim[0];
-        let kx = self.mem[weight].dim[2];
-        let ky = self.mem[weight].dim[3];
-        let (out_row, out_col) = (self.mem[input].dim[1] - kx + 1, self.mem[input].dim[2] - ky + 1);
+        let ki = self.mem[weight].dim[2];
+        let kj = self.mem[weight].dim[3];
+        let (out_row, out_col) = (self.mem[input].dim[1] - ki + 1, self.mem[input].dim[2] - kj + 1);
         let mut cur_weight: Vec<TensorAddress> = Vec::with_capacity(fout as usize);
         for layer in 0..fout {
             cur_weight.push(self.mem.save(self.mem[weight].at(&[Id(layer)])));
@@ -488,7 +491,7 @@ impl ConstraintSystem {
         for i in 0..out_row {
             let mut tmp: Vec<TensorAddress> = Vec::with_capacity(out_col as usize);
             for j in 0..out_col {
-                tmp.push(self.mem.save(self.mem[input].at(&[RangeFull(), Range(i..i+kx), Range(j..j+ky)])));
+                tmp.push(self.mem.save(self.mem[input].at(&[RangeFull(), Range(i..i+ki), Range(j..j+kj)])));
             }
             cur_input.push(tmp);
         }
@@ -502,6 +505,49 @@ impl ConstraintSystem {
                         None
                     };
                     self.dot(cur_input[i as usize][j as usize],cur_weight[layer as usize],self.mem[output].at_idx(&[layer, i, j]),cur_bias)
+                }
+            }
+        }
+    }
+
+    pub fn conv2d_padded(&mut self, input: TensorAddress, output: TensorAddress, weight: TensorAddress, bias: Option<(TensorAddress, u32)>) {
+        let fout = self.mem[weight].dim[0];
+        let ki = self.mem[weight].dim[2];
+        let kj = self.mem[weight].dim[3];
+        assert!(ki % 2 == 1 && kj % 2 == 1);
+        let (out_row, out_col) = (self.mem[input].dim[1], self.mem[input].dim[2]);
+
+        let padi = ki / 2;
+        let padj = kj / 2;
+
+        let mut cur_input: Vec<Vec<TensorAddress>> = Vec::with_capacity(out_row as usize);
+        for i in 0..out_row {
+            let mut tmp: Vec<TensorAddress> = Vec::with_capacity(out_col as usize);
+            for j in 0..out_col {
+                tmp.push(self.mem.save(self.mem[input].at(&[RangeFull(), Range(i.saturating_sub(padi)..min(out_row,i+padi+1)), Range(j.saturating_sub(padj)..min(out_col,j+padj+1))])));
+            }
+            cur_input.push(tmp);
+        }
+        for layer in 0..fout {
+            let mut cur_weight: Vec<Vec<TensorAddress>> = Vec::with_capacity(ki as usize);
+            for i in (0..ki).rev() {
+                let mut tmp: Vec<TensorAddress> = Vec::with_capacity(kj as usize);
+                for j in (0..kj).rev() {
+                    tmp.push(self.mem.save(self.mem[weight].at(&[Id(layer), RangeFull(), Range(i.saturating_sub(padi)..min(ki,i+padi+1)), Range(j.saturating_sub(padj)..min(kj,j+padj+1))])));
+                }
+                cur_weight.push(tmp);
+            }
+
+            for i in 0..out_row{
+                let u = if i < padi {i} else if i >= out_row - padi {i - (out_row - 2*padi - 1)} else {padi} as usize;
+                for j in 0..out_col{
+                    let cur_bias = if let Some((b, scale)) = bias {
+                        Some(self.mem[b].at_idx(&[layer, i/scale, j/scale]))
+                    } else {
+                        None
+                    };
+                    let v = if j < padj {j} else if j >= out_col - padj {j - (out_col - 2*padj - 1)} else {padj} as usize;
+                    self.dot(cur_input[i as usize][j as usize],cur_weight[u][v],self.mem[output].at_idx(&[layer, i, j]),cur_bias)
                 }
             }
         }
@@ -778,327 +824,6 @@ impl ConstraintSystem {
             self.compute.push((params.into_boxed_slice(), Functions::Packing));
         }
     }
-
-    pub fn run_conv2d_compact<T: Scalar>(mem: &MemoryManager, param: &[u32], var_dict: &mut Memory<T>) {
-        let (mul_result, k_col, packed_size,bit_length,extracted) = (param[0], param[1], param[2], param[3], param[4]);
-        let (fout, row_out, col_packed) = (mem[mul_result].dim[0],mem[mul_result].dim[1],mem[mul_result].dim[2]);
-
-        let offset = power_of_two::<T>(bit_length - 1);
-        let mut big_offset = T::zero();
-        for _ in 0..packed_size + k_col - 1 {
-            big_offset = (big_offset * T::from_i32(2) + T::one()) * offset;
-        }
-        let n_packed = packed_size + k_col - 1;
-        for layer_out in 0..fout {
-            //matching result
-            for r in 0..row_out {
-                for c in 0..col_packed {
-                    let val = (var_dict[mem[mul_result].at_idx(&[layer_out, r, c]) as usize] + big_offset).to_bytes();
-                    let mut ext = Vec::new();
-                    ext.resize((packed_size + k_col - 1) as usize, T::zero());
-                    for k in 0..(packed_size + k_col - 1) * bit_length {
-                        ext[(k / bit_length) as usize] += T::from_i32(((val[(k/8) as usize] >> (k % 8)) & 1) as i32) * power_of_two(k % bit_length);
-                    }
-                    for k in 0..packed_size + k_col - 1 {
-                        var_dict[mem[extracted].at_idx(&[layer_out,r,c * n_packed + k]) as usize] = ext[k as usize] - offset;
-                    }
-                }
-            }
-        }
-    }
-
-    pub fn conv2d_compact(&mut self, input: TensorAddress, output: TensorAddress, weight_rev: TensorAddress, bias: Option<(TensorAddress, u32)>, bit_length: u8) {
-        // packing weight
-        let dim = &self.mem[weight_rev].dim;
-        let (fout, fin, k_row, k_col) = (dim[0], dim[1], dim[2], dim[3]);
-
-        let packed_weight = self.mem.alloc(&[fout, fin, k_row]);
-        assert!(k_col * (bit_length as u32) <= SCALAR_SIZE);
-        self.packing_tensor(weight_rev, packed_weight, bit_length, k_col as u8,1, BigScalar::one(), true);
-
-        let (row, col) = (self.mem[input].dim[1], self.mem[input].dim[2]);
-        let packed_size = min((SCALAR_SIZE / (bit_length as u32)).checked_sub(k_col).unwrap(),col);
-        let col_packed = (col-1)/packed_size + 1;
-        let packed_layer = self.mem.alloc(&[fin, row, col_packed]);
-
-        //packing row of inputs
-        for layer in 0..fin {
-            for r in 0..row {
-                let input_row = self.mem.save(self.mem[input].at_(&[layer, r]));
-                let packed_row = self.mem.save(self.mem[packed_layer].at_(&[layer, r]));
-                self.packing_tensor(input_row, packed_row, bit_length, packed_size as u8,1, BigScalar::one(), true);
-            }
-        }
-
-        // splicing output by row
-        let mut mul_input = Vec::new();
-        for r in 0..row - k_row + 1 {
-            let mut mul_input_row = Vec::new();
-            for c in 0..col_packed {
-                mul_input_row.push(self.mem.save(self.mem[packed_layer].at(&[RangeFull(), Range(r..r + k_row), Id(c)])));
-            }
-            mul_input.push(mul_input_row);
-        }
-
-        //packing bias
-        let mut packed_bias: Vec<Vec<TensorAddress>> = Vec::with_capacity(fout as usize);
-        let mut bias_dim = 0;
-        let mut bias_scale = 0;
-        if let Some((b, scale)) = bias {
-            bias_dim = (col - k_col)/packed_size + 1;
-            bias_scale = scale;
-            for layer_out in 0..fout {
-                let mut packed_bias_row: Vec<TensorAddress> = Vec::with_capacity(((row - k_row)/scale + 1) as usize);
-                for r in 0..(row - k_row)/scale + 1 {
-                    let packed_bias = self.mem.alloc(&[bias_dim]);
-                    let bias_row = self.mem.save(self.mem[b].at_(&[layer_out, r]));
-                    self.packing_tensor(bias_row, packed_bias, bit_length, packed_size as u8, scale,power_of_two(bit_length as u32 * (k_col - 1)), true);
-                    packed_bias_row.push(packed_bias);
-                }
-                packed_bias.push(packed_bias_row);
-            }
-        }
-
-        let mul_result = self.mem.alloc(&[fout, row - k_row + 1, col_packed]);
-        for layer_out in 0..fout {
-            let packed_weight = self.mem.save(self.mem[packed_weight].at_(&[layer_out]));
-            for r in 0..row - k_row + 1 {
-                for c in 0..col_packed {
-                    let cur_bias = if c < bias_dim {Some(self.mem[packed_bias[layer_out as usize][(r/bias_scale) as usize]].at_idx(&[c]))} else {None};
-                    self.dot(mul_input[r as usize][c as usize], packed_weight, self.mem[mul_result].at_idx(&[layer_out, r, c]), cur_bias);
-                }
-            }
-        }
-
-        // sign extraction
-        let n_packed = packed_size + k_col - 1;
-        let extracted_length = (col_packed - 1) * n_packed + ((col-1) % packed_size) + k_col;
-        let extracted = self.mem.alloc(&[fout, row - k_row + 1, extracted_length]);
-
-        self.packing_tensor(extracted, mul_result, bit_length, n_packed as u8,1,BigScalar::one(), false);
-
-        let params = vec![mul_result, k_col, packed_size, bit_length as u32, extracted];
-        self.compute.push((params.into_boxed_slice(), Functions::ConvCompact));
-
-        fn split_tensor<const N:usize>(mem: &mut MemoryManager,tensor: TensorAddress, length: u32, pos: [u32; N]) -> [(Option<TensorAddress>, Option<TensorAddress>); N] {
-            let fully_packed = mem[tensor].dim[2]/length;
-            let remainder = mem[tensor].dim[2] % length;
-
-            // should not save this
-            let tmp=mem[tensor].partition(2, length);
-
-            let mut res: [(Option<TensorAddress>, Option<TensorAddress>); N] = [(None, None); N];
-            for i in 0..N - 1 {
-                let n= fully_packed + if remainder >= pos[i+1] {1} else {0};
-                let full = if n > 0 {
-                    Some(mem.save(tmp.at(&[RangeFull(), RangeFull(), RangeTo(..n), Range(pos[i]..pos[i+1])])))
-                } else {
-                    None
-                };
-                let rem = if pos[i] < remainder && remainder < pos[i+1] {
-                    Some(mem.save(tmp.at(&[RangeFull(), RangeFull(), Id(n), Range(pos[i]..remainder)])))
-                } else {
-                    None
-                };
-                res[i] = (full, rem);
-            }
-            res
-        }
-
-        fn extract_sign_part(c: &mut ConstraintSystem, extracted: TensorAddress, bit_length: u8) {
-            let output = c.mem.alloc(&c.mem[extracted].dim.to_owned());
-            c.sign(extracted, output, bit_length - 1);
-        }
-
-        let reduced_extract = self.mem.save(self.mem[extracted].at(&[RangeFull(), RangeFull(), RangeTo(..extracted_length - k_col  + 1)]));
-
-        let [(output_full, output_full_rem), (output_part, output_part_rem), (_,_)]= split_tensor(&mut self.mem, output, packed_size, [0, packed_size-(k_col-1), packed_size]);
-        let [(ext_left, ext_left_rem), (ext_full, ext_full_rem), (ext_right,ext_right_rem), (_,_)]= split_tensor(&mut self.mem, reduced_extract, n_packed, [0, k_col-1, packed_size, n_packed]);
-
-        // extract the fully correct part
-        if let Some(e) = ext_full {
-            self.sign(e, output_full.unwrap(), bit_length - 1);
-        }
-
-        if let Some(e) = ext_full_rem {
-            self.sign(e, output_full_rem.unwrap(), bit_length - 1);
-        }
-
-        //extract left and right sign part
-        if let Some(e) = ext_left {
-            extract_sign_part(self,e, bit_length);
-        }
-
-        if let Some(e) = ext_left_rem {
-            extract_sign_part(self,e, bit_length);
-        }
-
-        if let Some(e) = ext_right {
-            extract_sign_part(self,e, bit_length);
-        }
-
-        assert_eq!(ext_right_rem, None);
-        if let Some(left_rem) = ext_left_rem {
-            if let Some(right) = ext_right {
-                let sum_res = self.mem.alloc(&[fout, row - k_row + 1, self.mem[right].dim[2] - 1, k_col - 1]);
-                let left = self.mem.save(self.mem[ext_left.unwrap()].at(&[RangeFull(), RangeFrom(1..)]));
-                self.sum_two(right, left, sum_res);
-                self.sign(sum_res, output_part.unwrap(), bit_length - 1);
-
-                let sum_res = self.mem.alloc(&[fout, row - k_row + 1, self.mem[left_rem].dim[2]]);
-                let right_rem = self.mem.save(self.mem[right].at(&[RangeFull(), Id(self.mem[right].dim[2] - 1), RangeTo(..self.mem[left_rem].dim[2])]));
-                self.sum_two(right_rem, left_rem, sum_res);
-                self.sign(sum_res, output_part_rem.unwrap(), bit_length - 1);
-            }
-        }
-    }
-
-    pub fn run_fully_connected_compact<T: Scalar>(mem: &MemoryManager, param: &[u32], var_dict: &mut Memory<T>) {
-        if let [input, output, weight, packed_weight, sum, max_bits] = param[..6] {
-
-            let n_packed = scalar::SCALAR_SIZE/max_bits as u32;
-            let input_size = mem[input].size();
-            let output_size = mem[output].size();
-            let output_packed = (output_size - 1)/n_packed + 1;
-
-            //packing and multiply
-            let mut input_iter = mem[input].iter();
-            for i in 0..input_size {
-                let cur_input = input_iter.next().unwrap();
-                for j in 0..output_packed {
-                    let packed = mem[packed_weight].at_idx(&[j, i]);
-                    let mut s = T::zero();
-                    for k in n_packed*j..min(output_size, n_packed*(j+1)) {
-                        s += power_of_two::<T>((k - n_packed * j) * max_bits) * var_dict[mem[weight].at_idx(&[k, i]) as usize];
-                    }
-                    s *= var_dict[cur_input as usize];
-                    var_dict[packed as usize] = s;
-                }
-            }
-
-            // calculate sum
-            let mut bias_iter = if param.len() == 7 {
-                Some(mem[param[6]].iter())
-            } else {
-                None
-            };
-
-            for i in 0..output_packed {
-                //prepare bias
-                let mut s: T = T::zero();
-                if let Some(iter) = bias_iter.as_mut() {
-                    for k in 0..n_packed {
-                        match iter.next() {
-                            Some(x) => {
-                                s += var_dict[x as usize] * power_of_two(k * max_bits);
-                            },
-                            None => break
-                        }
-                    }
-                }
-                for j in 0..input_size {
-                    s += var_dict[mem[packed_weight].at_idx(&[i,j]) as usize];
-                }
-                var_dict[mem[sum].at_idx(&[i]) as usize] = s;
-            }
-
-            let offset = power_of_two::<T>(max_bits - 1);
-            let mut big_offset = T::zero();
-            for _ in 0..n_packed{
-                big_offset = (big_offset * T::from_i32(2) + T::one()) * offset;
-            }
-
-            //matching result
-            let mut output_iter = mem[output].iter();
-            for i in 0..output_packed {
-                let val = (var_dict[mem[sum].at_idx(&[i]) as usize] + big_offset).to_bytes();
-                let mut ext = Vec::new();
-                ext.resize(n_packed as usize, T::zero());
-                for k in 0..n_packed * max_bits {
-                    ext[(k / max_bits) as usize] += T::from_i32(((val[(k/8) as usize] >> (k % 8)) & 1) as i32) * power_of_two(k % max_bits);
-                }
-                for k in 0..n_packed {
-                    let idx = i * n_packed + k;
-                    if idx >= output_size {
-                        break
-                    }
-                    let output_pos = output_iter.next().unwrap();
-                    var_dict[output_pos as usize] = ext[k as usize] - offset;
-                }
-            }
-        } else {
-            panic!("params don't match");
-        }
-    }
-
-    // Return out sign tensor
-    pub fn fully_connected_compact(&mut self, input: TensorAddress, output: TensorAddress, weight: TensorAddress, bias: Option<TensorAddress>, max_bits: u8, relu: bool) -> TensorAddress {
-        let n_packed = scalar::SCALAR_SIZE/max_bits as u32;
-        let input_size = self.mem[input].size();
-        let output_size = self.mem[output].size();
-        let output_packed = (output_size - 1)/n_packed + 1;
-
-        //packing and multiply
-        let packed_weight = self.mem.alloc(&[output_packed, input_size]);
-        let mut input_iter = self.mem[input].iter();
-        for i in 0..input_size {
-            let cur_input = input_iter.next().unwrap();
-            for j in 0..output_packed {
-                let packed = self.mem[packed_weight].at_idx(&[j, i]);
-                for k in n_packed*j..min(output_size, n_packed*(j+1)) {
-                    self.a.push((self.n_cons, self.mem[weight].at_idx(&[k, i]), power_of_two((k - n_packed * j) * max_bits as u32)));
-                }
-                self.b.push((self.n_cons, cur_input, BigScalar::one()));
-                self.c.push((self.n_cons, packed, BigScalar::one()));
-                self.n_cons += 1;
-            }
-        }
-
-        // calculate sum
-        let mut bias_iter = if let Some(b) =  bias {
-            Some(self.mem[b].iter())
-        } else {
-            None
-        };
-
-        let sum = self.mem.alloc(&[output_packed]);
-        for i in 0..output_packed {
-            //prepare bias
-            if let Some(iter) = bias_iter.as_mut() {
-                for k in 0..n_packed {
-                    match iter.next() {
-                        Some(x) => {
-                            self.a.push((self.n_cons, x, power_of_two(k * max_bits as u32)));
-                        },
-                        None => break
-                    }
-                }
-            }
-            for j in 0..input_size {
-                self.a.push((self.n_cons, self.mem[packed_weight].at_idx(&[i,j]), BigScalar::one()));
-                            }
-            self.b.push((self.n_cons, self.mem.one_var, BigScalar::one()));
-            self.c.push((self.n_cons, self.mem[sum].at_idx(&[i]), BigScalar::one()));
-            self.n_cons += 1;
-        }
-
-        // bit decomposition
-        let sign = self.mem.alloc(&[output_size]);
-        self.packing_tensor(output, sum, max_bits, n_packed as u8, 1, BigScalar::one(), false);
-
-        let mut params = vec![input, output, weight, packed_weight, sum, max_bits as u32];
-        if let Some(b) = bias {
-            params.push(b);
-        }
-        self.compute.push((params.into_boxed_slice(), Functions::FCCompact));
-        if relu {
-            self.relu(output, sign, max_bits - 1);
-        } else {
-            self.sign(output, sign, max_bits - 1);
-        }
-        sign
-    }
-
 }
 
 #[cfg(test)]
@@ -1156,6 +881,29 @@ mod tests {
         assert!(x.verify(&mem));
     }
 
+
+    #[test]
+    fn conv2d_padded_test() {
+        let mut x = ConstraintSystem::new();
+        let input = x.mem.alloc(&[2,5,5]);
+        let weight = x.mem.alloc(&[2,2,3,3]);
+        let output = x.mem.alloc(&[2,5,5]);
+        let bias = x.mem.alloc(&[2,5,5]);
+
+        x.conv2d_padded(input, output, weight, Some((bias, 1)));
+        let mut mem = x.mem.new_memory();
+        x.load_memory(input, &mut mem, &[-1,0,2,0,2,0,1,-1,0,2,1,0,2,1,1,-1,0,1,0,1,-1,0,-1,0,0,1,0,0,0,1,0,2,0,0,1,0,0,2,0,0,0,1,1,0,2,-1,0,-1,2,0]);
+        x.load_memory(weight, &mut mem, &[0,-1,1,1,1,2,2,2,1,1,0,0,1,2,-1,0,0,-1,-1,0,-1,1,1,2,0,0,2,1,-1,-1,-1,0,0,1,0,1]);
+        x.load_memory(bias, &mut mem, &[1,2,-1,2,0,-1,2,-1,1,2,2,-1,0,-1,2,0,2,2,-1,0,-1,0,1,0,-1,2,0,2,1,0,0,1,2,2,1,-1,-1,-1,0,1,1,-1,0,-1,0,1,0,-1,0,0]);
+
+        x.compute(&mut mem);
+        assert_eq!(mem[x.mem[output].begin() as usize..x.mem[output].end() as usize], [1,7,1,6,8,2,10,4,12,8,1,-2,13,9,4,-5,4,1,1,4,-3,-2,-4,4,0,5,0,6,12,2,1,6,2,4,2,-2,6,5,6,2,0,-9,-1,-1,2,-1,-4,-2,-3,-4]);
+        x.sort_cons();
+        let mem = slice_to_scalar(&mem);
+        assert!(x.verify(&mem));
+    }
+
+
     #[test]
     fn packing_test() {
         let mut x = ConstraintSystem::new();
@@ -1187,48 +935,6 @@ mod tests {
     }
 
 
-    #[test]
-    fn conv2d_compact_test() {
-        let mut x = ConstraintSystem::new();
-        let input = x.mem.alloc(&[2,5,5]);
-        let weight = x.mem.alloc(&[2,2,3,3]);
-        let output = x.mem.alloc(&[2,3,3]);
-        let bias = x.mem.alloc(&[2,3,3]);
-
-
-        let weight_rev = x.mem.save(x.mem[weight].reverse(3));
-
-        x.conv2d_compact(input, output, weight_rev, Some((bias, 1)), 7);
-
-        let mut mem: Vec<BigScalar> = slice_to_scalar(&[1,0,1,-1,0,0,0,-2,4,-1,-4,0,3,-4,0,0,0,1,-1,1,-4,2,3,-1,0,-4,2,2,-3,-1,-1,1,2,-1,1,4,4,2,3,-3,0,3,-2,3,0,2,3,3,-2,2,4,3,3,-4,-4,-1,3,1,4,-2,-2,0,-2,4,-3,0,0,0,-2,0,0,0,0,3,4,-3,-4,-1,-1,-4,3,1,-2,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-3,0,-3,0,1,-4,-1,2,0,0,-4,2,1,3,2,-3,4,-3]);
-        mem.resize(x.mem.n_var as usize, Scalar::zero());
-
-        x.compute(&mut mem);
-        assert_eq!(mem[87..87+18], slice_to_scalar(&[1,1,-1,-1,-1,1,1,-1,-1,-1,1,-1,-1,-1,1,-1,-1,-1]));
-        x.sort_cons();
-        assert!(x.verify(&mem));
-    }
-
-    #[test]
-    fn conv2d_compact_test_small() {
-        let mut x = ConstraintSystem::new();
-        let input = x.mem.alloc(&[1,4,3]);
-        let weight = x.mem.alloc(&[1,1,3,3]);
-        let output = x.mem.alloc(&[1,2,1]);
-
-
-        let weight_rev = x.mem.save(x.mem[weight].reverse(3));
-
-        x.conv2d_compact(input, output, weight_rev, None, 5);
-        let mut mem = x.mem.new_memory::<BigScalar>();
-        x.load_memory(input, &mut mem, &slice_to_scalar(&[1,1,2, 1,2,1, 1,1,1, 1,2,1]));
-        x.load_memory(weight, &mut mem, &slice_to_scalar(&[1,1,-1, 1,-1,1, 1,1,1]));
-
-        x.compute(&mut mem);
-        assert_eq!(mem[x.mem[output].begin() as usize..x.mem[output].end() as usize], slice_to_scalar(&[1,1]));
-        x.sort_cons();
-        assert!(x.verify(&mem));
-    }
 
     #[test]
     fn sign_test() {
@@ -1286,25 +992,6 @@ mod tests {
         mem[8..18].copy_from_slice(&slice_to_scalar(&[-2,3,-2,5,3,-1,5,0,3,2]));
         x.compute(&mut mem);
         assert_eq!(mem[6..8], slice_to_scalar(&[0, -1]));
-        x.sort_cons();
-        assert!(x.verify(&mem));
-    }
-
-    #[test]
-    fn fully_connected_compact_test() {
-        let mut x = ConstraintSystem::new();
-        let input = x.mem.alloc(&[5]);
-        let output = x.mem.alloc(&[2]);
-        let weight = x.mem.alloc(&[2,5]);
-        let bias = x.mem.alloc(&[2]);
-        x.fully_connected_compact(input, output, weight, Some(bias),4, false);
-
-        let mut mem = x.mem.new_memory();
-        mem[1..6].copy_from_slice(&slice_to_scalar(&[2,-2,4,3,1]));
-        mem[8..18].copy_from_slice(&slice_to_scalar(&[-2,3,-2,5,3,-1,5,0,3,2]));
-        x.load_memory(bias, &mut mem, &slice_to_scalar(&[5,-1]));
-        x.compute(&mut mem);
-        assert_eq!(mem[6..8], slice_to_scalar(&[5, -2]));
         x.sort_cons();
         assert!(x.verify(&mem));
     }

@@ -9,6 +9,7 @@ use super::{BigScalar, ConstraintSystem, ScalarAddress, Scalar, Memory, MemoryMa
 // this curve has order of 2^2 * 1809251394333065553493296640760748560224405988559295410502714166441017894153
 const ORDER_BIT: u32 = 251;
 
+// reduced order
 pub fn get_order<T: Scalar>() -> T{
     const ORDER: [u8; 32] = [9, 101, 184, 12, 125, 201, 154, 3, 25, 91, 234, 114, 31, 29, 214, 12, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4];
     T::from_bytes(ORDER)
@@ -313,44 +314,32 @@ impl ConstraintSystem {
 #[cfg(test)]
 mod test {
     use super::{ConstraintSystem, get_a, get_d, BigScalar};
-    use crate::scalar::Scalar;
+    use crate::{r1cs::elliptic_curve::get_order, scalar::Scalar};
+    fn get_p() -> [BigScalar; 2] {
+        [
+            BigScalar::from(4u8),
+            BigScalar::from_bits([76, 130, 153, 225, 227, 248, 189, 252, 230, 93, 83, 140, 31, 24, 25, 166, 160, 41, 87, 122, 154, 76, 139, 222, 19, 171, 116, 205, 184, 155, 121, 5] )
+        ]
+    }
+
     #[test]
     fn elliptic_mul_test() {
         let mut x = ConstraintSystem::new();
         let input = x.mem.alloc(&[2]);
         let scalar = x.mem.alloc(&[1]);
-        let _output = x.mem.alloc(&[2]);
+        let output = x.mem.alloc(&[2]);
         x.elliptic_mul(&[1,2], 3, &[4,5], get_a(), get_d());
         x.reorder_for_spartan(&[input]);
         let mut mem = x.mem.new_memory();
         println!("Number of constraints {}", x.cons_size());
-        x.load_memory(input, &mut mem,  &[BigScalar::from_bytes([165, 69, 15, 204, 207, 113, 207, 38, 62, 63, 78, 98, 124, 5, 127, 19, 227, 172, 104, 57, 76, 114, 16, 216, 22, 108, 66, 159, 246, 205, 84, 4]), BigScalar::from_bytes([117, 164, 25, 122, 240, 125, 11, 247, 5, 194, 218, 37, 43, 92, 11, 13, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 10]) ]);
-        x.load_memory(scalar, &mut mem, &[BigScalar::from_bytes([25, 84, 226, 59, 134, 71, 177, 159, 112, 237, 66, 73, 32, 229, 56, 247, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 1])]);
+        x.load_memory(input, &mut mem, &get_p());
+        x.load_memory(scalar, &mut mem, &[get_order()]);
 
         x.compute(&mut mem);
+
         assert_eq!(mem[1], BigScalar::from_bytes([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]));
         assert_eq!(mem[2], BigScalar::from_bytes([1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]));
 
-        x.sort_cons();
-        assert!(x.verify(&mem));
-    }
-    #[test]
-    fn elliptic_add_cond_test() {
-        let mut x = ConstraintSystem::new();
-        let input = x.mem.alloc(&[2]);
-
-        let _output = x.mem.alloc(&[2]);
-        let cond = x.mem.alloc(&[1]);
-        x.elliptic_add_cond(&[1,2], &[1,2], &[3,4], x.mem[cond].begin(), get_a(), get_d());
-        x.reorder_for_spartan(&[input]);
-        let mut mem = x.mem.new_memory();
-        println!("Number of constraints {}", x.cons_size());
-        x.load_memory(input, &mut mem,  &[BigScalar::from_bytes([165, 69, 15, 204, 207, 113, 207, 38, 62, 63, 78, 98, 124, 5, 127, 19, 227, 172, 104, 57, 76, 114, 16, 216, 22, 108, 66, 159, 246, 205, 84, 4]), BigScalar::from_bytes([117, 164, 25, 122, 240, 125, 11, 247, 5, 194, 218, 37, 43, 92, 11, 13, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 10]) ]);
-        x.load_memory(cond, &mut mem, &[BigScalar::from_i32(1)]);
-
-        x.compute(&mut mem);
-        assert_eq!(mem[0], BigScalar::from_bytes([227, 208, 89, 14, 152, 41, 191, 159, 136, 174, 168, 128, 19, 33, 43, 177, 193, 252, 112, 138, 17, 196, 201, 63, 134, 163, 141, 17, 28, 122, 57, 1]));
-        assert_eq!(mem[1], BigScalar::from_bytes([185, 35, 46, 205, 201, 112, 138, 240, 163, 149, 219, 55, 113, 185, 85, 195, 174, 120, 151, 169, 200, 251, 23, 84, 122, 246, 118, 250, 234, 35, 142, 14]));
 
         x.sort_cons();
         assert!(x.verify(&mem));
