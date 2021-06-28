@@ -94,6 +94,12 @@ pub struct ConstraintSystem {
 }
 
 #[derive(Copy, Clone)]
+pub enum ActivationFunction {
+    Sign,
+    Relu
+}
+
+#[derive(Copy, Clone)]
 enum Functions {
     Sum = 0,
     Mul = 1,
@@ -667,6 +673,13 @@ impl ConstraintSystem {
 
         let params = Box::new([input, output]);
         self.compute.push((params, Functions::Relu));
+    }
+
+    pub fn activation(&mut self, input: TensorAddress, output: TensorAddress, max_bits: u8, t: ActivationFunction) {
+        match t {
+            ActivationFunction::Relu => self.relu(input, output, max_bits),
+            ActivationFunction::Sign => self.sign(input, output, max_bits)
+        }
     }
 
     fn run_max_pool<T: Scalar>(mem: &MemoryManager, param: &[u32], var_dict: &mut Memory<T>) {

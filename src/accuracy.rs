@@ -91,7 +91,7 @@ fn get_q() -> [Scalar; 2] {
 
 pub fn zknet_accuracy(verify: bool) {
     let mut rng = rand::thread_rng();
-    let network = nn::NeuralNetwork::new(true);
+    let network = nn::NeuralNetwork::new_lenet(true);
     let mut memory = network.load_weight::<Scalar>("params/params.pkl");
     let (dataset, truth) = nn::load_dataset("dataset");
     print!("Done loading! Enter sample id: ");

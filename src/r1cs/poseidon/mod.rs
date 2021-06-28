@@ -368,12 +368,11 @@ impl ConstraintSystem {
     }
 
     // this bit count should include sign bit
-    pub fn packing_and_check_range(&mut self, input: TensorAddress, bits: u8, binary: bool) -> TensorAddress {
-        let bits = if binary {1} else {bits};
+    pub fn packing_and_check_range(&mut self, input: TensorAddress, bits: u8) -> TensorAddress {
         let n_packed = crate::scalar::SCALAR_SIZE as u8 / bits;
         let output = self.mem.alloc(&[(self.mem[input].size() - 1)/n_packed as u32 + 1]);
         self.packing_tensor(input, output, bits, n_packed, 1, BigScalar::one(), true);
-        if binary {
+        if bits == 1 {
             for i in self.mem[input].iter() {
                 self.a.push((self.n_cons, i, BigScalar::one()));
                 self.b.push((self.n_cons, i, BigScalar::one()));

@@ -52,9 +52,13 @@ fn do_zk_proof(network: &NeuralNetwork, memory: &[Scalar]) {
     }
 }
 
+pub fn zknet_infer_nin(verify: bool) {
+    let network = nn::NeuralNetwork::new_nin(false);
+}
+
 pub fn zknet_infer(verify: bool) {
     let mut rng = rand::thread_rng();
-    let network = nn::NeuralNetwork::new(false);
+    let network = nn::NeuralNetwork::new_lenet(false);
     let mut memory = network.load_weight::<Scalar>("params/params.pkl");
     let (dataset, truth) = nn::load_dataset("dataset");
     print!("Done loading! Enter sample id: ");

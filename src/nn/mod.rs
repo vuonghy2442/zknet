@@ -1,22 +1,16 @@
 use crate::r1cs::ConstraintSystem;
-use crate::r1cs::{TensorAddress};
+use crate::r1cs::{TensorAddress, ActivationFunction};
 use std::cmp::max;
 use std::path::Path;
 use serde_pickle::from_reader;
 use std::fs::File;
-use std::collections::HashMap;
 use crate::scalar::Scalar;
-use crate::r1cs::elliptic_curve::{get_a, get_d};
+use std::collections::HashMap;
 
-macro_rules! hashmap {
-    ($( $key: expr => $val: expr ),*) => {{
-         let mut map = ::std::collections::HashMap::new();
-         $( map.insert($key, $val); )*
-         map
-    }}
-}
+mod lenet;
+mod nin;
 
-fn convolution_layer_sign_compact(c: &mut ConstraintSystem, input: TensorAddress, kernel: [u32;2], feature: u32, bias_scale: u32, max_bits: u8) -> (TensorAddress, TensorAddress, TensorAddress) {
+fn convolution_layer_act_compact(c: &mut ConstraintSystem, input: TensorAddress, kernel: [u32;2], feature: u32, bias_scale: u32, max_bits: u8, act: ActivationFunction) -> (TensorAddress, TensorAddress, TensorAddress) {
     let (row, col) = (c.mem[input].dim[1], c.mem[input].dim[2]);
     let (row_out, col_out) = (row - kernel[0] + 1, col - kernel[1] + 1);
     let conv_out = c.mem.alloc(&[feature, row_out, col_out ]);
@@ -24,10 +18,24 @@ fn convolution_layer_sign_compact(c: &mut ConstraintSystem, input: TensorAddress
     let conv_weight_rev = c.mem.save(c.mem[conv_weight].reverse(3));
     let bias_scale = if bias_scale == 0 {max(row, col)} else {bias_scale};
     let conv_bias = c.mem.alloc(&[feature, (row_out-1)/bias_scale + 1, (col_out-1)/bias_scale + 1]);
-    c.conv2d_compact(input, conv_out, conv_weight_rev, Some((conv_bias, bias_scale)), max_bits + 1);
+    c.conv2d_compact(input, conv_out, conv_weight_rev, Some((conv_bias, bias_scale)), max_bits + 1, act);
 
     return (conv_out, conv_weight, conv_bias);
 }
+
+fn padded_convolution_layer_act_compact(c: &mut ConstraintSystem, input: TensorAddress, kernel: [u32;2], feature: u32, bias_scale: u32, max_bits: u8, act: ActivationFunction) -> (TensorAddress, TensorAddress, TensorAddress) {
+    let (row, col) = (c.mem[input].dim[1], c.mem[input].dim[2]);
+    let conv_out = c.mem.alloc(&[feature, row, col]);
+    let conv_weight = c.mem.alloc(&[feature,c.mem[input].dim[0],kernel[0],kernel[1]]);
+    let conv_weight_rev = c.mem.save(c.mem[conv_weight].reverse(3));
+    let bias_scale = if bias_scale == 0 {max(row, col)} else {bias_scale};
+    let conv_bias = c.mem.alloc(&[feature, (row-1)/bias_scale + 1, (col-1)/bias_scale + 1]);
+    c.conv2d_padded_compact(input, conv_out, conv_weight_rev, Some((conv_bias, bias_scale)), max_bits + 1, act);
+
+    return (conv_out, conv_weight, conv_bias);
+}
+
+
 
 fn convolution_layer(c: &mut ConstraintSystem, input: TensorAddress, kernel: [u32;2], feature: u32, bias_scale: u32) -> (TensorAddress, TensorAddress, TensorAddress) {
     let (row, col) = (c.mem[input].dim[1], c.mem[input].dim[2]);
@@ -37,6 +45,17 @@ fn convolution_layer(c: &mut ConstraintSystem, input: TensorAddress, kernel: [u3
     let bias_scale = if bias_scale == 0 {max(row, col)} else {bias_scale};
     let conv_bias = c.mem.alloc(&[feature, (row_out-1)/bias_scale + 1, (col_out-1)/bias_scale + 1]);
     c.conv2d(input, conv_out, conv_weight, Some((conv_bias, bias_scale)));
+
+    return (conv_out, conv_weight, conv_bias);
+}
+
+fn padded_convolution_layer(c: &mut ConstraintSystem, input: TensorAddress, kernel: [u32;2], feature: u32, bias_scale: u32) -> (TensorAddress, TensorAddress, TensorAddress) {
+    let (row, col) = (c.mem[input].dim[1], c.mem[input].dim[2]);
+    let conv_out = c.mem.alloc(&[feature, row, col]);
+    let conv_weight = c.mem.alloc(&[feature,c.mem[input].dim[0],kernel[0],kernel[1]]);
+    let bias_scale = if bias_scale == 0 {max(row, col)} else {bias_scale};
+    let conv_bias = c.mem.alloc(&[feature, (row-1)/bias_scale + 1, (col-1)/bias_scale + 1]);
+    c.conv2d_padded(input, conv_out, conv_weight, Some((conv_bias, bias_scale)));
 
     return (conv_out, conv_weight, conv_bias);
 }
@@ -74,13 +93,13 @@ fn linear(c: &mut ConstraintSystem, input: TensorAddress, n_feature: u32) -> (Te
     return (output, weight, bias);
 }
 
-fn linear_compact(c: &mut ConstraintSystem, input: TensorAddress, n_feature: u32, max_bits: u8, relu: bool) -> (TensorAddress, TensorAddress, TensorAddress) {
+fn linear_compact(c: &mut ConstraintSystem, input: TensorAddress, n_feature: u32, max_bits: u8, act: ActivationFunction) -> (TensorAddress, TensorAddress, TensorAddress, TensorAddress) {
     let output = c.mem.alloc(&[n_feature]);
     let weight = c.mem.alloc(&[n_feature, c.mem[input].size()]);
     let bias = c.mem.alloc(&[n_feature]);
 
-    let res = c.fully_connected_compact(input, output, weight, Some(bias), max_bits + 1, relu);
-    return (if relu {res} else {output}, weight, bias);
+    let res = c.fully_connected_compact(input, output, weight, Some(bias), max_bits + 1, act);
+    return (res, output, weight, bias);
 }
 
 struct AccuracyParams {
@@ -119,105 +138,6 @@ pub fn load_dataset(path: &str) -> (Vec<Vec<i32>>, Vec<u8>) {
 
 
 impl NeuralNetwork {
-    pub fn new(accuracy: bool) -> NeuralNetwork {
-        let mut c = ConstraintSystem::new();
-        let input = c.mem.alloc(&[1,28,28]);
-        let input_cons = c.cons_size();
-        let (conv1_out, conv1_weight, conv1_bias) = convolution_layer(&mut c, input, [5,5], 20, 0); // 24 x 24
-        let conv1_cons = c.cons_size();
-        let conv1_out_sign = sign_activation(&mut c, conv1_out, 22);
-        let conv1_sign_cons = c.cons_size();
-        let pool1 = max_pool(&mut c, conv1_out_sign); // 12 x 12
-        let pool1_cons = c.cons_size();
-        let (conv2_out_sign, conv2_weight, conv2_bias) = convolution_layer_sign_compact(&mut c, pool1, [5,5], 50, 0, 9); // 8 x 8
-        let conv2_cons = c.cons_size();
-        let pool2 = max_pool(&mut c, conv2_out_sign);
-        let pool2_cons = c.cons_size();
-        let (relu_out, fc1_weight, fc1_bias) = linear_compact(&mut c, pool2, 500, 15, true);
-        let fc1_cons = c.cons_size();
-        let (fc2_out, fc2_weight, fc2_bias) = linear_compact(&mut c, relu_out, 10, 20, false);
-        let fc2_cons = c.cons_size();
-
-        let conv1_weight_packed = c.packing_and_check_range(conv1_weight, 13, false);
-        let conv1_bias_packed = c.packing_and_check_range(conv1_bias, 20, false);
-        let conv2_weight_packed = c.packing_and_check_range(conv2_weight, 1, true);
-        let conv2_bias_packed = c.packing_and_check_range(conv2_bias, 8, false);
-        let fc1_weight_packed = c.packing_and_check_range(fc1_weight, 1, true);
-        let fc1_bias_packed = c.packing_and_check_range(fc1_bias, 3, false);
-        let fc2_weight_packed = c.packing_and_check_range(fc2_weight, 10, false);
-        let fc2_bias_packed = c.packing_and_check_range(fc2_bias, 11, false);
-        let packed_cons = c.cons_size();
-
-        let commit_open = c.mem.alloc(&[1]);
-
-        let hash_output = c.poseidon_hash(&[commit_open, conv1_weight_packed, conv1_bias_packed, conv2_weight_packed, conv2_bias_packed
-            , fc1_weight_packed, fc1_bias_packed, fc2_weight_packed, fc2_bias_packed]);
-        let hash_cons = c.cons_size();
-
-        println!("conv1 constraints {}", conv1_cons - input_cons);
-        println!("conv1_sign constraints {}", conv1_sign_cons - conv1_cons);
-        println!("pool1 constraints {}", pool1_cons - conv1_sign_cons);
-        println!("conv2 constraints {}", conv2_cons - pool1_cons);
-        println!("pool2 constraints {}", pool2_cons - conv2_cons);
-        println!("fc1 constraints {}", fc1_cons - pool2_cons);
-        println!("fc2 constraints {}",fc2_cons - fc1_cons);
-        println!("packed constraints {}",packed_cons - fc2_cons);
-        println!("hash constraints {}",hash_cons - packed_cons);
-
-        let (output, acc) = if accuracy {
-            let p = c.mem.alloc(&[2]);
-            let q = c.mem.alloc(&[2]);
-            let result_open = c.mem.alloc(&[1]);
-            let ground_truth = c.mem.alloc(&[1]);
-            let value = c.mem.alloc(&[1]);
-            let result = c.mem.alloc(&[1]);
-            let mul_p = c.mem.alloc(&[2]);
-            let commited_result = c.mem.alloc(&[2]);
-
-
-            c.multiplexer(fc2_out, c.mem[ground_truth].begin(), c.mem[value].begin());
-            c.is_max(fc2_out, c.mem[value].begin(), c.mem[result].begin(), 20);
-            c.elliptic_mul(&c.mem[p].to_vec(), c.mem[result_open].begin(), &c.mem[mul_p].to_vec(), get_a(), get_d());
-            c.elliptic_add_cond(&c.mem[mul_p].to_vec(), &c.mem[q].to_vec(), &c.mem[commited_result].to_vec(), c.mem[result].begin(), get_a(), get_d());
-            println!("accuracy constraints {}", c.cons_size() - hash_cons);
-
-            c.reorder_for_spartan(&[input, ground_truth, commited_result, hash_output, p, q]);
-            (commited_result, Some(AccuracyParams{
-                ground_truth,
-                result_open,
-                p,
-                q
-            }))
-        } else {
-            c.reorder_for_spartan(&[input, fc2_out, hash_output]);
-            (fc2_out, None)
-        };
-        c.sort_cons();
-
-        println!("Constraints {}", c.cons_size());
-
-        let weight_map: HashMap<String, TensorAddress> = hashmap!{
-            String::from("conv1_weight") => conv1_weight,
-            String::from("conv1_bias") => conv1_bias,
-            String::from("conv2_weight") => conv2_weight,
-            String::from("conv2_bias") => conv2_bias,
-            String::from("fc1_weight") => fc1_weight,
-            String::from("fc1_bias") => fc1_bias,
-            String::from("fc2_weight") => fc2_weight,
-            String::from("fc2_bias") => fc2_bias
-        };
-
-        NeuralNetwork {
-            cons: c,
-            weight_map,
-            input,
-            output,
-            commit_hash: hash_output,
-            commit_open,
-            acc
-        }
-    }
-
     pub fn load_weight<T: Scalar>(&self, file: &str) -> Vec<T> {
         let w = File::open(file).unwrap();
         let weight: HashMap<String, Vec<i32>>= from_reader(w).unwrap();

@@ -1,4 +1,4 @@
-use super::{ConstraintSystem, Scalar, MemoryManager, Memory, TensorAddress, SCALAR_SIZE, BigScalar, RangeFull, Range, RangeFrom, RangeTo, Id, min, Functions};
+use super::{ConstraintSystem, Scalar, MemoryManager, Memory, TensorAddress, SCALAR_SIZE, BigScalar, RangeFull, Range, RangeFrom, RangeTo, Id, min, Functions, ActivationFunction};
 use crate::scalar::power_of_two;
 
 impl ConstraintSystem {
@@ -30,7 +30,7 @@ impl ConstraintSystem {
         }
     }
 
-    pub fn conv2d_compact(&mut self, input: TensorAddress, output: TensorAddress, weight_rev: TensorAddress, bias: Option<(TensorAddress, u32)>, bit_length: u8) {
+    pub fn conv2d_compact(&mut self, input: TensorAddress, output: TensorAddress, weight_rev: TensorAddress, bias: Option<(TensorAddress, u32)>, bit_length: u8, act: ActivationFunction) {
         // packing weight
         let dim = &self.mem[weight_rev].dim;
         let (fout, fin, k_row, k_col) = (dim[0], dim[1], dim[2], dim[3]);
@@ -112,6 +112,10 @@ impl ConstraintSystem {
 
             let mut res: [(Option<TensorAddress>, Option<TensorAddress>); N] = [(None, None); N];
             for i in 0..N - 1 {
+                if pos[i] == pos[i+1] {
+                    res[i] = (None, None);
+                    continue;
+                }
                 let n= fully_packed + if remainder >= pos[i+1] {1} else {0};
                 let full = if n > 0 {
                     Some(mem.save(tmp.at(&[RangeFull(), RangeFull(), RangeTo(..n), Range(pos[i]..pos[i+1])])))
@@ -134,19 +138,21 @@ impl ConstraintSystem {
         }
 
         let reduced_extract = self.mem.save(self.mem[extracted].at(&[RangeFull(), RangeFull(), RangeTo(..extracted_length - k_col  + 1)]));
-        let rem_extract = self.mem.save(self.mem[extracted].at(&[RangeFull(), RangeFull(), RangeFrom(extracted_length - k_col  + 1..)]));
-        extract_sign_part(self, rem_extract, bit_length);
+        if k_col != 1 {
+            let rem_extract = self.mem.save(self.mem[extracted].at(&[RangeFull(), RangeFull(), RangeFrom(extracted_length - k_col  + 1..)]));
+            extract_sign_part(self, rem_extract, bit_length);
+        }
 
         let [(output_full, output_full_rem), (output_part, output_part_rem), (_,_)]= split_tensor(&mut self.mem, output, packed_size, [0, packed_size-(k_col-1), packed_size]);
         let [(ext_left, ext_left_rem), (ext_full, ext_full_rem), (ext_right,ext_right_rem), (_,_)]= split_tensor(&mut self.mem, reduced_extract, n_packed, [0, k_col-1, packed_size, n_packed]);
 
         // extract the fully correct part
         if let Some(e) = ext_full {
-            self.sign(e, output_full.unwrap(), bit_length - 1);
+            self.activation(e, output_full.unwrap(), bit_length - 1, act);
         }
 
         if let Some(e) = ext_full_rem {
-            self.sign(e, output_full_rem.unwrap(), bit_length - 1);
+            self.activation(e, output_full_rem.unwrap(), bit_length - 1, act);
         }
 
         //extract left and right sign part
@@ -168,12 +174,12 @@ impl ConstraintSystem {
                 let sum_res = self.mem.alloc(&[fout, row - k_row + 1, self.mem[right].dim[2] - 1, k_col - 1]);
                 let left = self.mem.save(self.mem[ext_left.unwrap()].at(&[RangeFull(), RangeFrom(1..)]));
                 self.sum_two(right, left, sum_res);
-                self.sign(sum_res, output_part.unwrap(), bit_length - 1);
+                self.activation(sum_res, output_part.unwrap(), bit_length - 1, act);
 
                 let sum_res = self.mem.alloc(&[fout, row - k_row + 1, self.mem[left_rem].dim[2]]);
                 let right_rem = self.mem.save(self.mem[right].at(&[RangeFull(), Id(self.mem[right].dim[2] - 1), RangeTo(..self.mem[left_rem].dim[2])]));
                 self.sum_two(right_rem, left_rem, sum_res);
-                self.sign(sum_res, output_part_rem.unwrap(), bit_length - 1);
+                self.activation(sum_res, output_part_rem.unwrap(), bit_length - 1, act);
             }
         }
     }
@@ -195,7 +201,7 @@ mod tests {
 
         let weight_rev = x.mem.save(x.mem[weight].reverse(3));
 
-        x.conv2d_compact(input, output, weight_rev, Some((bias, 1)), 7);
+        x.conv2d_compact(input, output, weight_rev, Some((bias, 1)), 7, ActivationFunction::Sign);
 
         let mut mem: Vec<BigScalar> = slice_to_scalar(&[1,0,1,-1,0,0,0,-2,4,-1,-4,0,3,-4,0,0,0,1,-1,1,-4,2,3,-1,0,-4,2,2,-3,-1,-1,1,2,-1,1,4,4,2,3,-3,0,3,-2,3,0,2,3,3,-2,2,4,3,3,-4,-4,-1,3,1,4,-2,-2,0,-2,4,-3,0,0,0,-2,0,0,0,0,3,4,-3,-4,-1,-1,-4,3,1,-2,0,0,0,-1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-3,0,-3,0,1,-4,-1,2,0,0,-4,2,1,3,2,-3,4,-3]);
         mem.resize(x.mem.n_var as usize, Scalar::zero());
@@ -216,7 +222,7 @@ mod tests {
 
         let weight_rev = x.mem.save(x.mem[weight].reverse(3));
 
-        x.conv2d_compact(input, output, weight_rev, None, 5);
+        x.conv2d_compact(input, output, weight_rev, None, 5,ActivationFunction::Sign);
         let mut mem = x.mem.new_memory::<BigScalar>();
         x.load_memory(input, &mut mem, &slice_to_scalar(&[1,1,2, 1,2,1, 1,1,1, 1,2,1]));
         x.load_memory(weight, &mut mem, &slice_to_scalar(&[1,1,-1, 1,-1,1, 1,1,1]));

@@ -1,8 +1,8 @@
 use super::{ConstraintSystem, Scalar, MemoryManager, Memory, TensorAddress, SCALAR_SIZE, BigScalar, RangeFull, Range, RangeFrom, RangeTo, Id, min, Functions};
-use crate::scalar::power_of_two;
+use crate::{r1cs::ActivationFunction, scalar::power_of_two};
 
 impl ConstraintSystem {
-    pub fn conv2d_padded_compact(&mut self, input: TensorAddress, output: TensorAddress, weight_rev: TensorAddress, bias: Option<(TensorAddress, u32)>, bit_length: u8) {
+    pub fn conv2d_padded_compact(&mut self, input: TensorAddress, output: TensorAddress, weight_rev: TensorAddress, bias: Option<(TensorAddress, u32)>, bit_length: u8, act: ActivationFunction) {
         // packing weight
         let dim = &self.mem[weight_rev].dim;
         let (fout, fin, k_row, k_col) = (dim[0], dim[1], dim[2], dim[3]);
@@ -117,25 +117,27 @@ impl ConstraintSystem {
         let output_right = self.mem.save(self.mem[output].at(&[RangeFull(), RangeFull(), RangeFrom(col-pad_col..)]));
 
         let reduced_extract = self.mem.save(self.mem[extracted].at(&[RangeFull(), RangeFull(), RangeTo(..extracted_length - k_col  + 1)]));
-        let rem_extract = self.mem.save(self.mem[extracted].at(&[RangeFull(), RangeFull(), RangeFrom(extracted_length - pad_col..)]));
-        extract_sign_part(self, rem_extract, bit_length);
+        if k_col != 1 {
+            let rem_extract = self.mem.save(self.mem[extracted].at(&[RangeFull(), RangeFull(), RangeFrom(extracted_length - pad_col..)]));
+            extract_sign_part(self, rem_extract, bit_length);
+        }
 
         let extract_first = self.mem.save(self.mem[extracted].at(&[RangeFull(), RangeFull(), Range(pad_col..k_col-1)]));
         let extract_last = self.mem.save(self.mem[extracted].at(&[RangeFull(), RangeFull(), Range(extracted_length - k_col + 1..extracted_length - pad_col)]));
 
-        self.sign(extract_first, output_left, bit_length - 1);
-        self.sign(extract_last, output_right, bit_length - 1);
+        self.activation(extract_first, output_left, bit_length - 1, act);
+        self.activation(extract_last, output_right, bit_length - 1, act);
 
         let [(output_full, output_full_rem), (output_part, output_part_rem), (_,_)]= split_tensor(&mut self.mem, output_mid, packed_size, [0, packed_size-(k_col-1), packed_size]);
         let [(ext_left, ext_left_rem), (ext_full, ext_full_rem), (ext_right,ext_right_rem), (_,_)]= split_tensor(&mut self.mem, reduced_extract, n_packed, [0, k_col-1, packed_size, n_packed]);
 
         // extract the fully correct part
         if let Some(e) = ext_full {
-            self.sign(e, output_full.unwrap(), bit_length - 1);
+            self.activation(e, output_full.unwrap(), bit_length - 1, act);
         }
 
         if let Some(e) = ext_full_rem {
-            self.sign(e, output_full_rem.unwrap(), bit_length - 1);
+            self.activation(e, output_full_rem.unwrap(), bit_length - 1, act);
         }
 
         //extract left and right sign part
@@ -159,12 +161,12 @@ impl ConstraintSystem {
                 let sum_res = self.mem.alloc(&[fout, row - k_row + 1, self.mem[right].dim[2] - 1, k_col - 1]);
                 let left = self.mem.save(self.mem[ext_left.unwrap()].at(&[RangeFull(), RangeFrom(1..)]));
                 self.sum_two(right, left, sum_res);
-                self.sign(sum_res, output_part.unwrap(), bit_length - 1);
+                self.activation(sum_res, output_part.unwrap(), bit_length - 1, act);
 
                 let sum_res = self.mem.alloc(&[fout, row - k_row + 1, self.mem[left_rem].dim[2]]);
                 let right_rem = self.mem.save(self.mem[right].at(&[RangeFull(), Id(self.mem[right].dim[2] - 1), RangeTo(..self.mem[left_rem].dim[2])]));
                 self.sum_two(right_rem, left_rem, sum_res);
-                self.sign(sum_res, output_part_rem.unwrap(), bit_length - 1);
+                self.activation(sum_res, output_part_rem.unwrap(), bit_length - 1, act);
             }
         }
     }
@@ -184,7 +186,7 @@ mod tests {
 
         let weight_rev = x.mem.save(x.mem[weight].reverse(3));
 
-        x.conv2d_padded_compact(input, output, weight_rev, Some((bias, 1)), 5);
+        x.conv2d_padded_compact(input, output, weight_rev, Some((bias, 1)), 5, ActivationFunction::Sign);
         let mut mem = x.mem.new_memory();
         x.load_memory(input, &mut mem, &slice_to_scalar(&[-1,0,2,0,2,0,1,-1,0,2,1,0,2,1,1,-1,0,1,0,1,-1,0,-1,0,0,1,0,0,0,1,0,2,0,0,1,0,0,2,0,0,0,1,1,0,2,-1,0,-1,2,0]));
         x.load_memory(weight, &mut mem, &slice_to_scalar(&[0,-1,1,1,1,2,2,2,1,1,0,0,1,2,-1,0,0,-1,-1,0,-1,1,1,2,0,0,2,1,-1,-1,-1,0,0,1,0,1]));

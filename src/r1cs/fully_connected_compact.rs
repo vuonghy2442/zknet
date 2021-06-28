@@ -1,4 +1,4 @@
-use super::{ConstraintSystem, Scalar, MemoryManager, Memory, TensorAddress, scalar, BigScalar, min, Functions};
+use super::{ActivationFunction, BigScalar, ConstraintSystem, Functions, Memory, MemoryManager, Scalar, TensorAddress, min, scalar};
 use crate::scalar::power_of_two;
 
 impl ConstraintSystem {
@@ -82,7 +82,7 @@ impl ConstraintSystem {
     }
 
     // Return out sign tensor
-    pub fn fully_connected_compact(&mut self, input: TensorAddress, output: TensorAddress, weight: TensorAddress, bias: Option<TensorAddress>, max_bits: u8, relu: bool) -> TensorAddress {
+    pub fn fully_connected_compact(&mut self, input: TensorAddress, output: TensorAddress, weight: TensorAddress, bias: Option<TensorAddress>, max_bits: u8, act: ActivationFunction) -> TensorAddress {
         let n_packed = scalar::SCALAR_SIZE/max_bits as u32;
         let input_size = self.mem[input].size();
         let output_size = self.mem[output].size();
@@ -133,7 +133,7 @@ impl ConstraintSystem {
         }
 
         // bit decomposition
-        let sign = self.mem.alloc(&[output_size]);
+        let act_output = self.mem.alloc(&[output_size]);
         self.packing_tensor(output, sum, max_bits, n_packed as u8, 1, BigScalar::one(), false);
 
         let mut params = vec![input, output, weight, packed_weight, sum, max_bits as u32];
@@ -141,12 +141,8 @@ impl ConstraintSystem {
             params.push(b);
         }
         self.compute.push((params.into_boxed_slice(), Functions::FCCompact));
-        if relu {
-            self.relu(output, sign, max_bits - 1);
-        } else {
-            self.sign(output, sign, max_bits - 1);
-        }
-        sign
+        self.activation(output, act_output, max_bits - 1, act);
+        act_output
     }
 }
 
@@ -162,7 +158,7 @@ mod test {
         let output = x.mem.alloc(&[2]);
         let weight = x.mem.alloc(&[2,5]);
         let bias = x.mem.alloc(&[2]);
-        x.fully_connected_compact(input, output, weight, Some(bias),4, false);
+        x.fully_connected_compact(input, output, weight, Some(bias),4, ActivationFunction::Sign);
 
         let mut mem = x.mem.new_memory();
         mem[1..6].copy_from_slice(&slice_to_scalar(&[2,-2,4,3,1]));

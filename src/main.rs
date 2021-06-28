@@ -16,6 +16,7 @@ fn main() {
     io::stdin().read_line(&mut x).expect("Failed to get console input");
 
     match x.trim(){
+        "infer_nin" => infer::zknet_infer_nin(true),
         "infer" => infer::zknet_infer(true),
         "accuracy" => accuracy::zknet_accuracy(false),
         _ => {}
