@@ -13,6 +13,7 @@ mod conv2d_padded_compact;
 mod fully_connected_compact;
 mod poseidon;
 pub mod elliptic_curve;
+mod sum_pool;
 
 type ScalarAddress = u32;
 pub type TensorAddress = u32;
@@ -20,11 +21,11 @@ pub type TensorAddress = u32;
 type Memory<T> = [T];
 
 pub trait Functional: Sized {
-    const FUNCTIONS: [fn(mem: &MemoryManager, &[u32], &mut [Self]); 15];
+    const FUNCTIONS: [fn(mem: &MemoryManager, &[u32], &mut [Self]); 16];
 }
 
 impl<T:Scalar> Functional for T {
-    const FUNCTIONS: [fn(mem: &MemoryManager, &[u32], &mut [T]); 15] = [
+    const FUNCTIONS: [fn(mem: &MemoryManager, &[u32], &mut [T]); 16] = [
         ConstraintSystem::run_sum::<T>,
         ConstraintSystem::run_mul::<T>,
         ConstraintSystem::run_decompose::<T>,
@@ -40,6 +41,7 @@ impl<T:Scalar> Functional for T {
         ConstraintSystem::run_multiplexer::<T>,
         ConstraintSystem::run_elliptic_mul::<T>,
         ConstraintSystem::run_elliptic_add_cond::<T>,
+        ConstraintSystem::run_sum_pool::<T>,
     ];
 }
 
@@ -116,6 +118,7 @@ enum Functions {
     Multiplexer = 12,
     EllipticMul = 13,
     EllipticAddCond = 14,
+    SumPool = 15,
 }
 
 impl ConstraintSystem {

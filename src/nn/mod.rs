@@ -74,6 +74,15 @@ fn max_pool(c: &mut ConstraintSystem, input: TensorAddress) -> TensorAddress {
     return output;
 }
 
+fn sum_pool(c: &mut ConstraintSystem, input: TensorAddress, kernel: [u32; 2]) -> TensorAddress {
+    let dim = c.mem[input].dim.clone();
+    let output = c.mem.alloc(&[dim[0], dim[1]/kernel[0], dim[2]/kernel[1]]);
+
+    c.sum_pool(input, output, kernel);
+    return output;
+}
+
+
 fn resize(c: &mut ConstraintSystem, input: TensorAddress, shape: &[u32]) -> TensorAddress {
     c.mem.save(c.mem[input].resize(shape))
 }

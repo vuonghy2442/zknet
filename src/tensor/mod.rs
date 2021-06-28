@@ -233,6 +233,20 @@ impl VariableTensor {
     pub fn to_vec(&self) -> Vec<u32> {
         self.iter().collect_vec()
     }
+
+    pub fn flatten(&self) -> VariableTensor {
+        let mut prod = self.step[self.step.len()-1];
+        for (&i,&j) in self.dim.iter().zip(self.step.iter()).rev() {
+            assert_eq!(prod, j);
+            prod *= i as i32;
+        }
+
+        VariableTensor {
+            start:self.start,
+            dim: Box::new([self.size()]),
+            step: Box::new([self.step[self.step.len()-1]])
+        }
+    }
 }
 
 pub struct VariableTensorListIter {
