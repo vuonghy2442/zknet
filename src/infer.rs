@@ -9,9 +9,15 @@ use curve25519_dalek::scalar::Scalar;
 
 
 fn softmax(x: &mut [f64]) {
+    let mut mean: f64 = 0.0;
+    for val in x.iter_mut() {
+        mean += *val;
+    }
+    mean /= x.len() as f64;
+
     let mut sum = 0f64;
     for val in x.iter_mut() {
-        *val = val.exp();
+        *val = (*val - mean).exp();
         sum += *val;
     }
     for val in x.iter_mut() {
@@ -30,7 +36,7 @@ fn print_result(result: Vec<Scalar>, hash: Vec<Scalar>, truth: u8) {
     let mut prob = Vec::new();
     for (i, &r) in result.iter().enumerate(){
         println!("Raw {}: {}", i, r);
-        prob.push(r as f64/ 2u32.pow(10) as f64);
+        prob.push(r as f64/ 2u32.pow(16) as f64);
     }
     softmax(&mut prob);
     for (i,r) in prob.iter().enumerate() {
@@ -53,7 +59,23 @@ fn do_zk_proof(network: &NeuralNetwork, memory: &[Scalar]) {
 }
 
 pub fn zknet_infer_nin(verify: bool) {
+    let mut rng = rand::thread_rng();
     let network = nn::NeuralNetwork::new_nin(false);
+    let mut memory = network.load_weight::<Scalar>("params/params_nin.pkl");
+    let (dataset, truth) = nn::load_dataset("cifar10");
+    print!("Done loading! Enter sample id: ");
+    io::stdout().flush().unwrap();
+    let mut x: String = String::new();
+    io::stdin().read_line(&mut x).expect("Failed to get console input");
+    let x = x.trim().parse::<usize>().expect("Failed to parse int");
+
+    let commit_open = Scalar::random(&mut rng);
+    println!("Generate random commit open (private): {:#?}", commit_open);
+
+    let (result, hash) = network.run(&mut memory, &slice_to_scalar(&dataset[x]), None, &[commit_open], verify);
+
+    print_result(result, hash, truth[x]);
+    do_zk_proof(&network, &memory);
 }
 
 pub fn zknet_infer(verify: bool) {

@@ -14,6 +14,7 @@ mod fully_connected_compact;
 mod poseidon;
 pub mod elliptic_curve;
 mod sum_pool;
+mod packing;
 
 type ScalarAddress = u32;
 pub type TensorAddress = u32;
@@ -21,11 +22,11 @@ pub type TensorAddress = u32;
 type Memory<T> = [T];
 
 pub trait Functional: Sized {
-    const FUNCTIONS: [fn(mem: &MemoryManager, &[u32], &mut [Self]); 16];
+    const FUNCTIONS: [fn(mem: &MemoryManager, &[u32], &mut [Self]); 17];
 }
 
 impl<T:Scalar> Functional for T {
-    const FUNCTIONS: [fn(mem: &MemoryManager, &[u32], &mut [T]); 16] = [
+    const FUNCTIONS: [fn(mem: &MemoryManager, &[u32], &mut [T]); 17] = [
         ConstraintSystem::run_sum::<T>,
         ConstraintSystem::run_mul::<T>,
         ConstraintSystem::run_decompose::<T>,
@@ -42,6 +43,7 @@ impl<T:Scalar> Functional for T {
         ConstraintSystem::run_elliptic_mul::<T>,
         ConstraintSystem::run_elliptic_add_cond::<T>,
         ConstraintSystem::run_sum_pool::<T>,
+        ConstraintSystem::run_packing_tensor_by_dim::<T>,
     ];
 }
 
@@ -119,6 +121,7 @@ enum Functions {
     EllipticMul = 13,
     EllipticAddCond = 14,
     SumPool = 15,
+    PackingByDim = 16,
 }
 
 impl ConstraintSystem {
@@ -255,7 +258,7 @@ impl ConstraintSystem {
             if sa * sb != sc {
                 println!("Constraint {}", i);
                 println!("{} {} {}", self.a[ai-1].1, self.b[bi-1].1, self.c[ci-1].1);
-                println!("{} {} {}", sa.to_i32(), sb.to_i32(), sc.to_i32());
+                println!("{:#?} {:#?} {:#?}", sa, sb, sc);
                 return false;
             }
         }
@@ -754,92 +757,6 @@ impl ConstraintSystem {
             }
         }
     }
-
-    pub fn run_packing_tensor<T: Scalar>(mem: &MemoryManager, param: &[u32], var_dict: &mut Memory<T>) {
-        let mut in_iter = mem[param[0]].iter();
-        let mut out_iter = mem[param[1]].iter();
-        let (bit_length, n_packed) = (param[2] & 255, param[2] >> 8);
-        let scale = param[3];
-        let offset = if param.len() == 12 {
-            T::slice_u32_to_scalar(&param[4..12])
-        } else {
-            T::one()
-        };
-
-
-        let base =  T::from_i32(1 << bit_length);
-        let mut is_running = true;
-        let mut step = scale;
-        let mut cur_var = in_iter.next().unwrap();
-        while is_running {
-            let res = if let Some(r) = out_iter.next() {r} else {break};
-            let mut pow = T::one();
-            let mut sum_pow = T::zero();
-            let mut sum_res = T::zero();
-            for i in 0..n_packed {
-                step -= 1;
-                sum_pow += pow;
-                pow *= base;
-                if step == 0 || i == n_packed - 1{
-                    sum_res += var_dict[cur_var as usize] * sum_pow;
-                    sum_pow = T::zero();
-                }
-                if step == 0 {
-                    step = scale;
-                    match in_iter.next() {
-                        Some(var) => cur_var = var,
-                        None => {is_running = false; break}
-                    }
-                }
-            }
-            var_dict[res as usize] = sum_res * offset;
-        }
-    }
-
-    pub fn packing_tensor(&mut self, input: TensorAddress, output: TensorAddress, bit_length: u8, n_packed: u8, scale: u32, offset: BigScalar, compute: bool) {
-        let mut in_iter = self.mem[input].iter();
-        let mut out_iter = self.mem[output].iter();
-
-        let base =  power_of_two::<BigScalar>(bit_length as u32);
-        let mut is_running = true;
-        let mut step = scale;
-        let mut cur_var = in_iter.next().unwrap();
-        while is_running {
-            let res = if let Some(r) = out_iter.next() {r} else {break};
-            let mut pow: BigScalar = BigScalar::one();
-            let mut sum_pow = BigScalar::zero();
-            for i in 0..n_packed {
-                step -= 1;
-                sum_pow += pow;
-                pow *= base;
-                if step == 0 || i == n_packed - 1{
-                    self.a.push((self.n_cons, cur_var, sum_pow * offset));
-                    sum_pow = BigScalar::zero();
-                }
-                if step == 0 {
-                    step = scale;
-                    match in_iter.next() {
-                        Some(var) => cur_var = var,
-                        None =>  {
-                            is_running = false;
-                            break;
-                        }
-                    }
-                }
-            }
-
-            self.b.push((self.n_cons, self.mem.one_var, Scalar::one()));
-            self.c.push((self.n_cons, res, Scalar::one()));
-            self.n_cons += 1;
-        }
-        if compute {
-            let mut params = vec![input, output, bit_length as u32 + ((n_packed as u32) << 8), scale];
-            if offset != BigScalar::one() {
-                params.extend_from_slice(&scalar_to_vec_u32(offset));
-            }
-            self.compute.push((params.into_boxed_slice(), Functions::Packing));
-        }
-    }
 }
 
 #[cfg(test)]
@@ -918,39 +835,6 @@ mod tests {
         let mem = slice_to_scalar(&mem);
         assert!(x.verify(&mem));
     }
-
-
-    #[test]
-    fn packing_test() {
-        let mut x = ConstraintSystem::new();
-        let input = x.mem.alloc(&[10]);
-        let output = x.mem.alloc(&[2]);
-
-        x.packing_tensor(input, output, 3, 5,1,BigScalar::one(), true);
-        let mut mem = x.mem.new_memory::<i32>();
-        x.load_memory(input, &mut mem, &[1,2,3,4,5,6,7,8,9,10]);
-
-        x.compute(&mut mem);
-        assert_eq!(mem[x.mem[output].begin() as usize..x.mem[output].end() as usize], [22737, 46142]);
-        x.verify(&slice_to_scalar(&mem));
-    }
-
-    #[test]
-    fn packing_test_2() {
-        let mut x = ConstraintSystem::new();
-        let input = x.mem.alloc(&[4]);
-        let output = x.mem.alloc(&[2]);
-
-        x.packing_tensor(input, output, 3, 6,3,BigScalar::from(2u32), true);
-        let mut mem = x.mem.new_memory::<i32>();
-        x.load_memory(input, &mut mem, &[1,2,3,4]);
-
-        x.compute(&mut mem);
-        assert_eq!(mem[x.mem[output].begin() as usize..x.mem[output].end() as usize], [74825*2, 149723*2]);
-        x.verify(&slice_to_scalar(&mem));
-    }
-
-
 
     #[test]
     fn sign_test() {

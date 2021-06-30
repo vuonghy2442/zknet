@@ -20,13 +20,7 @@ impl ConstraintSystem {
         let packed_layer = self.mem.alloc(&[fin, row, col_packed]);
 
         //packing row of inputs
-        for layer in 0..fin {
-            for r in 0..row {
-                let input_row = self.mem.save(self.mem[input].at_(&[layer, r]));
-                let packed_row = self.mem.save(self.mem[packed_layer].at_(&[layer, r]));
-                self.packing_tensor(input_row, packed_row, bit_length, packed_size as u8,1, BigScalar::one(), true);
-            }
-        }
+        self.packing_tensor_by_dim(input,&[-1], packed_layer, bit_length, packed_size as u8,1,BigScalar::one(), true);
 
         // splicing output by row
         let mut mul_input = Vec::new();
@@ -77,7 +71,7 @@ impl ConstraintSystem {
         let extracted_length = (col_packed - 1) * n_packed + ((col-1) % packed_size) + k_col;
         let extracted = self.mem.alloc(&[fout, row, extracted_length]);
 
-        self.packing_tensor(extracted, mul_result, bit_length, n_packed as u8,1,BigScalar::one(), false);
+        self.packing_tensor_by_dim(extracted, &[-1], mul_result, bit_length, n_packed as u8,1,BigScalar::one(), false);
 
         let params = vec![mul_result, k_col, packed_size, bit_length as u32, extracted];
         self.compute.push((params.into_boxed_slice(), Functions::ConvCompact));

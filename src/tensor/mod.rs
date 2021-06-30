@@ -3,6 +3,7 @@ use std::ops::{Range, RangeFrom, RangeTo};
 
 use itertools::Itertools;
 
+#[derive(Clone, Debug)]
 pub enum TensorIndex {
     Range(Range<u32>),
     RangeFrom(RangeFrom<u32>),
@@ -16,6 +17,36 @@ pub struct VariableTensor {
     pub start: u32,
     pub dim: Box<[u32]>,
     step: Box<[i32]>
+}
+
+pub struct VariableTensorSliceIter {
+    tensor: VariableTensor,
+    idx: Vec<TensorIndex>,
+    end: bool
+}
+
+impl Iterator for VariableTensorSliceIter {
+    type Item = VariableTensor;
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.end {
+            return None
+        }
+
+        let res = self.tensor.at(&self.idx);
+        self.end = true;
+        for (i,&size) in self.idx.iter_mut().zip(self.tensor.dim.iter()).rev() {
+            if let TensorIndex::Id(i) = i {
+                if *i < size - 1 {
+                    *i += 1;
+                    self.end = false;
+                    break
+                } else {
+                    *i = 0;
+                }
+            }
+        };
+        return Some(res);
+    }
 }
 
 pub struct VariableTensorIter {
@@ -227,6 +258,22 @@ impl VariableTensor {
             tensor: self.clone(),
             idx: Vec::new(),
             val_next: self.start as i32
+        }
+    }
+
+    // support negative indexing
+    pub fn iter_slice(&self, fixed_dim: &[i32]) -> VariableTensorSliceIter {
+        let mut idx: Vec<TensorIndex> = Vec::new();
+        idx.resize(self.dim.len(), TensorIndex::Id(0));
+        for &i in fixed_dim {
+            let i = if i < 0 { i + (self.dim.len() as i32) } else {i};
+            assert!(0 <= i && i < (self.dim.len() as i32) );
+            idx[i as usize] = TensorIndex::RangeFull();
+        }
+        VariableTensorSliceIter {
+            tensor: self.clone(),
+            idx,
+            end: false
         }
     }
 

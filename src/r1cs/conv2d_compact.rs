@@ -5,7 +5,7 @@ impl ConstraintSystem {
     pub fn run_conv2d_compact<T: Scalar>(mem: &MemoryManager, param: &[u32], var_dict: &mut Memory<T>) {
         let (mul_result, k_col, packed_size,bit_length,extracted) = (param[0], param[1], param[2], param[3], param[4]);
         let (fout, row_out, col_packed) = (mem[mul_result].dim[0],mem[mul_result].dim[1],mem[mul_result].dim[2]);
-
+        let row_dim = mem[extracted].dim[2];
         let offset = power_of_two::<T>(bit_length - 1);
         let mut big_offset = T::zero();
         for _ in 0..packed_size + k_col - 1 {
@@ -23,7 +23,11 @@ impl ConstraintSystem {
                         ext[(k / bit_length) as usize] += T::from_i32(((val[(k/8) as usize] >> (k % 8)) & 1) as i32) * power_of_two(k % bit_length);
                     }
                     for k in 0..packed_size + k_col - 1 {
-                        var_dict[mem[extracted].at_idx(&[layer_out,r,c * n_packed + k]) as usize] = ext[k as usize] - offset;
+                        let idx = c * n_packed + k;
+                        if idx >= row_dim {
+                            break
+                        }
+                        var_dict[mem[extracted].at_idx(&[layer_out,r,idx]) as usize] = ext[k as usize] - offset;
                     }
                 }
             }
@@ -44,14 +48,11 @@ impl ConstraintSystem {
         let col_packed = (col-1)/packed_size + 1;
         let packed_layer = self.mem.alloc(&[fin, row, col_packed]);
 
-        //packing row of inputs
-        for layer in 0..fin {
-            for r in 0..row {
-                let input_row = self.mem.save(self.mem[input].at_(&[layer, r]));
-                let packed_row = self.mem.save(self.mem[packed_layer].at_(&[layer, r]));
-                self.packing_tensor(input_row, packed_row, bit_length, packed_size as u8,1, BigScalar::one(), true);
-            }
-        }
+        println!("packed weight {}", self.cons_size());
+
+        // packing row of inputs
+        self.packing_tensor_by_dim(input,&[-1], packed_layer, bit_length, packed_size as u8,1,BigScalar::one(), true);
+
 
         // splicing output by row
         let mut mul_input = Vec::new();
@@ -82,6 +83,8 @@ impl ConstraintSystem {
             }
         }
 
+        println!("packed bias {}", self.cons_size());
+
         let mul_result = self.mem.alloc(&[fout, row - k_row + 1, col_packed]);
         for layer_out in 0..fout {
             let packed_weight = self.mem.save(self.mem[packed_weight].at_(&[layer_out]));
@@ -93,12 +96,15 @@ impl ConstraintSystem {
             }
         }
 
+        println!("mul {}", self.cons_size());
+
+
         // sign extraction
         let n_packed = packed_size + k_col - 1;
         let extracted_length = (col_packed - 1) * n_packed + ((col-1) % packed_size) + k_col;
         let extracted = self.mem.alloc(&[fout, row - k_row + 1, extracted_length]);
 
-        self.packing_tensor(extracted, mul_result, bit_length, n_packed as u8,1,BigScalar::one(), false);
+        self.packing_tensor_by_dim(extracted,&[-1], mul_result, bit_length, n_packed as u8,1,BigScalar::one(), false);
 
         let params = vec![mul_result, k_col, packed_size, bit_length as u32, extracted];
         self.compute.push((params.into_boxed_slice(), Functions::ConvCompact));
@@ -155,6 +161,8 @@ impl ConstraintSystem {
             self.activation(e, output_full_rem.unwrap(), bit_length - 1, act);
         }
 
+        println!("extract full {}", self.cons_size());
+
         //extract left and right sign part
         if let Some(e) = ext_left {
             extract_sign_part(self,e, bit_length);
@@ -167,6 +175,8 @@ impl ConstraintSystem {
         if let Some(e) = ext_right {
             extract_sign_part(self,e, bit_length);
         }
+
+        println!("extract left right {}", self.cons_size());
 
         assert_eq!(ext_right_rem, None);
         if let Some(left_rem) = ext_left_rem {
@@ -182,6 +192,8 @@ impl ConstraintSystem {
                 self.activation(sum_res, output_part_rem.unwrap(), bit_length - 1, act);
             }
         }
+        println!("done ext {}", self.cons_size());
+
     }
 }
 

@@ -1,7 +1,6 @@
 use std::{convert::TryInto, usize};
 
-use super::{ConstraintSystem, Scalar, MemoryManager, Memory, TensorAddress, SCALAR_SIZE, BigScalar, RangeFull, Range, RangeFrom, RangeTo, Id, min, Functions, ActivationFunction};
-use crate::scalar::power_of_two;
+use super::{ConstraintSystem, Scalar, MemoryManager, Memory, TensorAddress, BigScalar, Functions};
 
 impl ConstraintSystem {
     pub fn run_sum_pool<T: Scalar>(mem: &MemoryManager, param: &[u32], var_dict: &mut Memory<T>) {
