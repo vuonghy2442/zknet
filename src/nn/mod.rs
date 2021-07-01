@@ -6,9 +6,12 @@ use serde_pickle::from_reader;
 use std::fs::File;
 use crate::scalar::Scalar;
 use std::collections::HashMap;
+use serde::{Serialize, Deserialize};
 
 mod lenet;
 mod nin;
+mod run;
+pub mod zk;
 
 fn convolution_layer_act_compact(c: &mut ConstraintSystem, input: TensorAddress, kernel: [u32;2], feature: u32, bias_scale: u32, max_bits: u8, act: ActivationFunction) -> (TensorAddress, TensorAddress, TensorAddress) {
     let (row, col) = (c.mem[input].dim[1], c.mem[input].dim[2]);
@@ -111,6 +114,7 @@ fn linear_compact(c: &mut ConstraintSystem, input: TensorAddress, n_feature: u32
     return (res, output, weight, bias);
 }
 
+#[derive(Serialize,Deserialize)]
 struct AccuracyParams {
     ground_truth: TensorAddress,
     result_open: TensorAddress,
@@ -118,6 +122,7 @@ struct AccuracyParams {
     q: TensorAddress
 }
 
+#[derive(Serialize,Deserialize)]
 pub struct NeuralNetwork {
     cons: ConstraintSystem,
     weight_map: HashMap<String, TensorAddress>,
@@ -126,7 +131,8 @@ pub struct NeuralNetwork {
     commit_hash: TensorAddress,
     commit_open: TensorAddress,
 
-    acc: Option<AccuracyParams>
+    acc: Option<AccuracyParams>,
+    scaling: f64
 }
 
 pub struct AccuracyCommitment<T: Scalar> {
@@ -146,6 +152,12 @@ pub fn load_dataset(path: &str) -> (Vec<Vec<i32>>, Vec<u8>) {
 }
 
 
+pub enum NeuralNetworkType {
+    LeNet,
+    NetworkInNetwork
+}
+
+
 impl NeuralNetwork {
     pub fn load_weight<T: Scalar>(&self, file: &str) -> Vec<T> {
         let w = File::open(file).unwrap();
@@ -158,10 +170,6 @@ impl NeuralNetwork {
             self.cons.load_memory(*address, &mut memory, &data);
         };
         memory
-    }
-
-    pub fn get_spartan_instance(&self) -> (libspartan::Instance, usize, usize, usize, usize) {
-        return self.cons.get_spartan_instance();
     }
 
     pub fn run<T: Scalar>(&self, var_dict: &mut [T], input: &[T], accuracy_commitment: Option<AccuracyCommitment<T>>, commit_open: &[T], verify: bool) -> (Vec<T>, Vec<T>) {
@@ -197,5 +205,12 @@ impl NeuralNetwork {
             println!("Verified");
         }
         (res, hash)
+    }
+
+    pub fn zknet_factory(network: NeuralNetworkType, accuracy: bool) -> NeuralNetwork {
+        match network {
+            NeuralNetworkType::LeNet => NeuralNetwork::new_lenet(accuracy),
+            NeuralNetworkType::NetworkInNetwork => NeuralNetwork::new_nin(accuracy)
+        }
     }
 }

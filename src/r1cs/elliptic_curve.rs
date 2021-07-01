@@ -173,7 +173,7 @@ impl ConstraintSystem {
                     mem[tmp_last].clone()
                 } else {
                     mem[tmp].at_(&[i as u32])
-                }.iter().collect::<Vec<u32>>();
+                }.to_vec();
 
                 let res_add = &tmp[5..7];
                 Self::run_elliptic_add(&sum, &base, &tmp[0..5], res_add, param_a, param_d, var_dict);

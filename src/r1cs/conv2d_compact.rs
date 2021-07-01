@@ -48,8 +48,6 @@ impl ConstraintSystem {
         let col_packed = (col-1)/packed_size + 1;
         let packed_layer = self.mem.alloc(&[fin, row, col_packed]);
 
-        println!("packed weight {}", self.cons_size());
-
         // packing row of inputs
         self.packing_tensor_by_dim(input,&[-1], packed_layer, bit_length, packed_size as u8,1,BigScalar::one(), true);
 
@@ -83,8 +81,6 @@ impl ConstraintSystem {
             }
         }
 
-        println!("packed bias {}", self.cons_size());
-
         let mul_result = self.mem.alloc(&[fout, row - k_row + 1, col_packed]);
         for layer_out in 0..fout {
             let packed_weight = self.mem.save(self.mem[packed_weight].at_(&[layer_out]));
@@ -95,9 +91,6 @@ impl ConstraintSystem {
                 }
             }
         }
-
-        println!("mul {}", self.cons_size());
-
 
         // sign extraction
         let n_packed = packed_size + k_col - 1;
@@ -161,8 +154,6 @@ impl ConstraintSystem {
             self.activation(e, output_full_rem.unwrap(), bit_length - 1, act);
         }
 
-        println!("extract full {}", self.cons_size());
-
         //extract left and right sign part
         if let Some(e) = ext_left {
             extract_sign_part(self,e, bit_length);
@@ -175,8 +166,6 @@ impl ConstraintSystem {
         if let Some(e) = ext_right {
             extract_sign_part(self,e, bit_length);
         }
-
-        println!("extract left right {}", self.cons_size());
 
         assert_eq!(ext_right_rem, None);
         if let Some(left_rem) = ext_left_rem {
@@ -192,8 +181,6 @@ impl ConstraintSystem {
                 self.activation(sum_res, output_part_rem.unwrap(), bit_length - 1, act);
             }
         }
-        println!("done ext {}", self.cons_size());
-
     }
 }
 

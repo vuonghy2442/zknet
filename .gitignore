@@ -1,3 +1,7 @@
 /target
 .vs
 proof.dat
+/result
+*.net
+open.dat
+/proof

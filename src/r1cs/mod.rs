@@ -7,6 +7,7 @@ use std::cmp::{min, max};
 use std::usize;
 use curve25519_dalek::scalar::Scalar as BigScalar;
 use crate::scalar::{self, SCALAR_SIZE, Scalar, power_of_two, scalar_to_vec_u32};
+use serde::{Serialize, Deserialize};
 
 mod conv2d_compact;
 mod conv2d_padded_compact;
@@ -47,6 +48,7 @@ impl<T:Scalar> Functional for T {
     ];
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct MemoryManager {
     mem_dict: Vec<VariableTensor>,
     n_var: u32,
@@ -88,6 +90,7 @@ impl Index<TensorAddress> for MemoryManager {
     }
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct ConstraintSystem {
     a: Vec<(u32, u32, BigScalar)>,
     b: Vec<(u32, u32, BigScalar)>,
@@ -103,7 +106,7 @@ pub enum ActivationFunction {
     Relu
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Serialize, Deserialize)]
 enum Functions {
     Sum = 0,
     Mul = 1,
@@ -204,7 +207,19 @@ impl ConstraintSystem {
         }
     }
 
-    pub fn get_spartan_instance(&self) -> (libspartan::Instance, usize, usize, usize, usize) {
+    pub fn get_num_vars(&self) -> usize {
+        self.mem.one_var as usize
+    }
+
+    pub fn get_num_inputs(&self) -> usize {
+        (self.mem.n_var - self.mem.one_var - 1) as usize
+    }
+
+    pub fn get_non_zeros(&self) -> usize {
+        max(max(self.a.len(),self.b.len()),self.c.len())
+    }
+
+    pub fn get_spartan_instance(&self) -> libspartan::Instance {
         fn parse_matrix(mat: &[(u32, u32, BigScalar)]) -> Vec<(usize, usize, [u8; 32])> {
             let mut ans: Vec<(usize, usize, [u8; 32])> = Vec::with_capacity(mat.len());
             for row in mat {
@@ -215,15 +230,11 @@ impl ConstraintSystem {
             }
             return ans;
         }
-        let num_cons = self.n_cons as usize;
-        let num_vars = self.mem.one_var as usize;
-        let num_inputs = (self.mem.n_var - self.mem.one_var - 1) as usize;
-        let non_zeros=max(max(self.a.len(),self.b.len()),self.c.len());
-        (libspartan::Instance::new(num_cons,
-            num_vars,
-            num_inputs,
+        libspartan::Instance::new(self.cons_size() as usize,
+            self.get_num_vars(),
+            self.get_num_inputs(),
             &parse_matrix(&self.a), &parse_matrix(&self.b), &parse_matrix(&self.c)
-        ).unwrap(), num_cons, num_vars, num_inputs, non_zeros)
+        ).unwrap()
     }
 
     pub fn sort_cons(&mut self) {

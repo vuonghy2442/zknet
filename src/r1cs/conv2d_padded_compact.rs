@@ -1,4 +1,4 @@
-use super::{ConstraintSystem, Scalar, MemoryManager, Memory, TensorAddress, SCALAR_SIZE, BigScalar, RangeFull, Range, RangeFrom, RangeTo, Id, min, Functions};
+use super::{ConstraintSystem, MemoryManager, TensorAddress, SCALAR_SIZE, BigScalar, RangeFull, Range, RangeFrom, RangeTo, Id, min, Functions};
 use crate::{r1cs::ActivationFunction, scalar::power_of_two};
 
 impl ConstraintSystem {

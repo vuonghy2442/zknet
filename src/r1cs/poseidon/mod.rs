@@ -75,30 +75,30 @@ impl ConstraintSystem {
         // addding constant
         let mut cur_state= input.to_vec();
         for i in 0..r_f {
-            let next_state = round_output.at_(&[i as u32]).iter().collect::<Vec<u32>>();
+            let next_state = round_output.at_(&[i as u32]).to_vec();
             full_round_x5( &cur_state, &next_state,
-                        &temp_f.at_(&[i as u32]).iter().collect::<Vec<u32>>(),
+                        &temp_f.at_(&[i as u32]).to_vec(),
                          Some((i+1)*constant::T), var_dict);
             cur_state = next_state;
         }
         // middle rounds
         for i in r_f..r_f+constant::R_P {
-            let next_state = round_output.at_(&[i as u32]).iter().collect::<Vec<u32>>();
+            let next_state = round_output.at_(&[i as u32]).to_vec();
             partial_round_x5( &cur_state, &next_state,
-                        &temp_p.at_(&[(i - r_f) as u32]).iter().collect::<Vec<u32>>(),
+                        &temp_p.at_(&[(i - r_f) as u32]).to_vec(),
                         Some((i+1)*constant::T), var_dict);
             cur_state = next_state;
         }
         // final rounds - 1
         for i in r_f+constant::R_P..constant::R_F+constant::R_P - 1 {
-            let next_state = round_output.at_(&[i as u32]).iter().collect::<Vec<u32>>();
+            let next_state = round_output.at_(&[i as u32]).to_vec();
             full_round_x5( &cur_state, &next_state,
-                        &temp_f.at_(&[(i - constant::R_P) as u32]).iter().collect::<Vec<u32>>(),
+                        &temp_f.at_(&[(i - constant::R_P) as u32]).to_vec(),
                         Some((i+1)*constant::T), var_dict);
             cur_state = next_state;
         }
         full_round_x5( &cur_state, output,
-            &temp_f.at_(&[(constant::R_F - 1) as u32]).iter().collect::<Vec<u32>>(),
+            &temp_f.at_(&[(constant::R_F - 1) as u32]).to_vec(),
             None, var_dict);
 
     }
@@ -184,30 +184,30 @@ impl ConstraintSystem {
         // addding constant
         let mut cur_state= input.to_vec();
         for i in 0..r_f {
-            let next_state = round_output.at_(&[i as u32]).iter().collect::<Vec<u32>>();
+            let next_state = round_output.at_(&[i as u32]).to_vec();
             full_round_x5(self, &cur_state, &next_state,
-                        &temp_f.at_(&[i as u32]).iter().collect::<Vec<u32>>(),
+                        &temp_f.at_(&[i as u32]).to_vec(),
                         Some((i+1)*constant::T));
             cur_state = next_state;
         }
         // middle rounds
         for i in r_f..r_f+constant::R_P {
-            let next_state = round_output.at_(&[i as u32]).iter().collect::<Vec<u32>>();
+            let next_state = round_output.at_(&[i as u32]).to_vec();
             partial_round_x5(self, &cur_state, &next_state,
-                        &temp_p.at_(&[(i - r_f) as u32]).iter().collect::<Vec<u32>>(),
+                        &temp_p.at_(&[(i - r_f) as u32]).to_vec(),
                         Some((i+1)*constant::T));
             cur_state = next_state;
         }
         // final rounds - 1
         for i in r_f+constant::R_P..constant::R_F+constant::R_P - 1 {
-            let next_state = round_output.at_(&[i as u32]).iter().collect::<Vec<u32>>();
+            let next_state = round_output.at_(&[i as u32]).to_vec();
             full_round_x5(self, &cur_state, &next_state,
-                        &temp_f.at_(&[(i - constant::R_P) as u32]).iter().collect::<Vec<u32>>(),
+                        &temp_f.at_(&[(i - constant::R_P) as u32]).to_vec(),
                          Some((i+1)*constant::T));
             cur_state = next_state;
         }
         full_round_x5(self, &cur_state, output,
-            &temp_f.at_(&[(constant::R_F - 1) as u32]).iter().collect::<Vec<u32>>(),
+            &temp_f.at_(&[(constant::R_F - 1) as u32]).to_vec(),
             None);
     }
 
@@ -217,8 +217,8 @@ impl ConstraintSystem {
                 var_dict[y as usize] = var_dict[x as usize] + from_hex(constant::ROUND_CONST[i]);
             }
             Self::run_added_poseidon_perm_box(
-                &mem[input_added].iter().collect::<Vec<u32>>(),
-                &mem[output].iter().collect::<Vec<u32>>(),
+                &mem[input_added].to_vec(),
+                &mem[output].to_vec(),
                 split_temp_tensor(&mem[temp]), var_dict
             );
         } else {
@@ -237,8 +237,8 @@ impl ConstraintSystem {
         }
         let temp = self.mem.alloc(&[constant::TEMP_SIZE as u32]);
         self.added_poseidon_perm_box(
-            &self.mem[input_added].iter().collect::<Vec<u32>>(),
-            &self.mem[output].iter().collect::<Vec<u32>>(),
+            &self.mem[input_added].to_vec(),
+            &self.mem[output].to_vec(),
             self.mem[temp].clone()
         );
 
@@ -291,7 +291,7 @@ impl ConstraintSystem {
                     }
                     output_mem
                 } else {
-                    mem[temp_res].at_(&[i]).iter().collect::<Vec<u32>>()
+                    mem[temp_res].at_(&[i]).to_vec()
                 };
                 Self::run_added_poseidon_perm_box(&state, &next_state, split_temp_tensor(&mem[temp_val].at_(&[i])), var_dict);
                 state = next_state;
@@ -354,7 +354,7 @@ impl ConstraintSystem {
                 }
                 output_mem
             } else {
-                self.mem[temp_res].at_(&[i]).iter().collect::<Vec<u32>>()
+                self.mem[temp_res].at_(&[i]).to_vec()
             };
             self.added_poseidon_perm_box(&state, &next_state, self.mem[temp_val].at_(&[i]));
             state = next_state;

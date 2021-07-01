@@ -75,7 +75,7 @@ impl NeuralNetwork {
             println!("accuracy constraints {}", c.cons_size() - hash_cons);
 
             c.reorder_for_spartan(&[input, ground_truth, commited_result, hash_output, p, q]);
-            (commited_result, Some(AccuracyParams{
+            (result, Some(AccuracyParams{
                 ground_truth,
                 result_open,
                 p,
@@ -107,7 +107,8 @@ impl NeuralNetwork {
             output,
             commit_hash: hash_output,
             commit_open,
-            acc
+            acc,
+            scaling: 1024.0
         }
     }
 }
