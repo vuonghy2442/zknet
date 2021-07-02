@@ -1,5 +1,6 @@
 use crate::r1cs::ConstraintSystem;
 use crate::r1cs::{TensorAddress, ActivationFunction};
+use core::num;
 use std::cmp::max;
 use std::convert::TryInto;
 use std::path::Path;
@@ -163,10 +164,11 @@ pub enum NeuralNetworkType {
 impl NeuralNetwork {
     pub fn get_commit_pq_address(&self) -> Option<[[usize; 2];3]> {
         if let Some(acc) = &self.acc {
+            let num_vars =  self.cons.get_num_vars() + 1;
             Some([
-                self.cons.mem[acc.output].iter().map(|x|  x as usize).collect_vec().try_into().unwrap(),
-                self.cons.mem[acc.p].iter().map(|x|  x as usize).collect_vec().try_into().unwrap(),
-                self.cons.mem[acc.q].iter().map(|x|  x as usize).collect_vec().try_into().unwrap(),
+                self.cons.mem[acc.output].iter().map(|x|  x as usize - num_vars).collect_vec().try_into().unwrap(),
+                self.cons.mem[acc.p].iter().map(|x|  x as usize - num_vars ).collect_vec().try_into().unwrap(),
+                self.cons.mem[acc.q].iter().map(|x|  x as usize - num_vars).collect_vec().try_into().unwrap(),
             ])
         } else {
             None
