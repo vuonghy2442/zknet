@@ -194,7 +194,11 @@ fn main() {
                 x => {error!("Unknown neural network type {}", x); panic!()}
             };
             let acc = m.is_present("accuracy");
+            let start = quanta::Instant::now();
             let nn = nn::NeuralNetwork::zknet_factory(nn_type, acc);
+            let dur = quanta::Instant::now() - start;
+            info!("Done generating r1cs in {}", dur.as_secs_f64());
+
             io::zknet_save(
                 &nn,
                 m.value_of("OUTPUT").unwrap(),
