@@ -89,7 +89,10 @@ pub fn run_acc(network: &NeuralNetwork, memory: &mut [Scalar],  commit_open: Sca
         let (result, hash) = network.run(memory, &slice_to_scalar(&dataset[i]), Some(acc), &[commit_open], verify);
         total_correct += (result[0] == Scalar::one()) as u32;
 
+        let start = quanta::Instant::now();
         save_memory(memory, network.cons.get_num_vars(),save_path, format!("sample_{}", i).as_str(), compress_level);
+        let dur = quanta::Instant::now() - start;
+        info!("Done save result in {}", dur.as_secs_f64());
 
         all_result.push(result);
         all_hash.push(hash);
@@ -156,7 +159,10 @@ pub fn run_infer(network: &NeuralNetwork, memory: &mut [Scalar],  commit_open: S
         let (result, hash) = network.run(memory, &slice_to_scalar(&dataset[i]), None, &[commit_open], verify);
         print_result(&result, truth[i], network.scaling);
 
+        let start = quanta::Instant::now();
         save_memory(memory, network.cons.get_num_vars(), save_path, format!("sample_{}", i).as_str(), compress_level);
+        let dur = quanta::Instant::now() - start;
+        info!("Done save result in {}", dur.as_secs_f64());
 
         all_result.push(result);
         all_hash.push(hash);
@@ -176,10 +182,14 @@ pub fn run_infer(network: &NeuralNetwork, memory: &mut [Scalar],  commit_open: S
 
 impl NeuralNetwork {
     pub fn run_dataset(&self, commit_open: Scalar, weight: &str, dataset: &str, id: &[usize], verify: bool, save_path: &str, compress_level: i32) {
+        let start = quanta::Instant::now();
         let mut memory = self.load_weight::<Scalar>(weight);
-        info!("Done loading weight");
+        let dur = quanta::Instant::now() - start;
+        info!("Done loading weight in {}", dur.as_secs_f64());
+        let start = quanta::Instant::now();
         let (dataset, truth) = nn::load_dataset(dataset);
-        info!("Done loading dataset");
+        let dur = quanta::Instant::now() - start;
+        info!("Done loading dataset in {}", dur.as_secs_f64());
         if let Some(_) = self.acc {
             run_acc(self, &mut memory, commit_open, dataset, truth, id, verify, save_path, compress_level)
         } else {

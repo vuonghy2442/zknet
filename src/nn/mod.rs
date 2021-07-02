@@ -202,9 +202,10 @@ impl NeuralNetwork {
         }
 
         self.cons.load_memory(self.commit_open, var_dict, commit_open);
+        let start_compute = quanta::Instant::now();
         self.cons.compute(var_dict);
-
-        info!("Done computing");
+        let dur_compute = quanta::Instant::now() - start_compute;
+        info!("Done computing in {}", dur_compute.as_secs_f64());
 
         let mut res = Vec::with_capacity(self.cons.mem[self.output].size() as usize);
         for c in self.cons.mem[self.output].iter() {
@@ -217,8 +218,10 @@ impl NeuralNetwork {
         };
 
         if verify {
+            let start_verify = quanta::Instant::now();
             assert!(self.cons.verify(&T::to_big_scalar(&var_dict)));
-            info!("Verified");
+            let dur_verify = quanta::Instant::now() - start_verify;
+            info!("Verified in {}", dur_verify.as_secs_f64());
         }
         (res, hash)
     }

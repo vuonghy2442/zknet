@@ -20,6 +20,7 @@ zstd = "0.9"
 sha2 = "0.9"
 simplelog = "0.10"
 log = "0.4"
+quanta = "0.9"
 
 [profile.release]
 lto = true
