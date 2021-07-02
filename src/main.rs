@@ -220,6 +220,7 @@ fn main() {
                 let q = q_vec[0];
                 let info_path = Path::new(m.value_of("IO_PATH").unwrap());
                 let agg_open: Scalar = io::load_from_file( info_path.join("open_accuracy").to_str().unwrap()).unwrap();
+                debug!("agg_open {:?}", agg_open.as_bytes());
                 let total_correct: u32 = io::load_from_file( info_path.join("total_correct").to_str().unwrap()).unwrap();
                 let mul_p = elliptic_mul(&p, agg_open, param_a, param_d);
                 debug!("open * p {:?}", mul_p);
@@ -229,6 +230,8 @@ fn main() {
                 debug!("sum p q {:?}", sum_pq);
                 if sum_pq == point {
                     info!("Accuracy verified {}/{}", total_correct, total_sample);
+                } else {
+                    error!("Accuracy is invalid");
                 }
             }
         }
