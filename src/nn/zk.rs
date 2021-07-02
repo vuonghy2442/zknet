@@ -120,6 +120,7 @@ pub fn prove_nizk(inst: &Instance, gens: &NIZKGens, witness_path: &str, io_path:
     let assignment_inps = VarsAssignment::new(&inps).unwrap();
 
     info!("Calculating nizk proof for sample {}", id);
+    let start = quanta::Instant::now();
     let mut prover_transcript = Transcript::new(b"nizk_example");
     let proof = NIZK::prove(
         &inst,
@@ -128,16 +129,21 @@ pub fn prove_nizk(inst: &Instance, gens: &NIZKGens, witness_path: &str, io_path:
         &gens,
         &mut prover_transcript,
     );
-
+    let dur = quanta::Instant::now() - start;
+    info!("Done proving in {}", dur.as_secs_f64());
+    let start = quanta::Instant::now();
     io::save_to_file(proof, save_path).unwrap();
-    info!("Writen nizk proof to {}", save_path);
+    let dur = quanta::Instant::now() - start;
+    info!("Writen nizk proof to {} in {}", save_path, dur.as_secs_f64());
 }
 
 pub fn verify_nizk(inst: &Instance, gens: &NIZKGens, proof: NIZK, inps: &Vec<[u8; 32]>) -> bool {
     let assignment_inps = VarsAssignment::new(&inps).unwrap();
     let mut verifier_transcript = Transcript::new(b"nizk_example");
+    let start = quanta::Instant::now();
     let res = proof.verify(inst, &assignment_inps, &mut verifier_transcript, gens).is_ok();
-    info!("Done verified: {}", if res {"valid"} else {"invalid"});
+    let dur = quanta::Instant::now() - start;
+    info!("Done verified in {}: {}", dur.as_secs_f64(), if res {"valid"} else {"invalid"});
     res
 }
 
@@ -148,6 +154,7 @@ pub fn prove_snark(inst: &Instance, gens: &SNARKGens, decomm: &ComputationDecomm
     let assignment_inps = VarsAssignment::new(&inps).unwrap();
 
     info!("Calculating snark proof for sample {}", id);
+    let start = quanta::Instant::now();
     let mut prover_transcript = Transcript::new(b"nizk_example");
     let proof = SNARK::prove(
         &inst,
@@ -157,13 +164,20 @@ pub fn prove_snark(inst: &Instance, gens: &SNARKGens, decomm: &ComputationDecomm
         &gens,
         &mut prover_transcript,
     );
-
+    let dur = quanta::Instant::now() - start;
+    info!("Done proving in {}", dur.as_secs_f64());
+    let start = quanta::Instant::now();
     io::save_to_file(proof, save_path).unwrap();
-    info!("Writen snark  proof to {}", save_path);
+    let dur = quanta::Instant::now() - start;
+    info!("Writen snark  proof to {} in {}", save_path, dur.as_secs_f64());
 }
 
 pub fn verify_snark(gens: &SNARKGens, comm: &ComputationCommitment, proof: SNARK, inps: &Vec<[u8; 32]>) -> bool {
     let assignment_inps = VarsAssignment::new(&inps).unwrap();
     let mut verifier_transcript = Transcript::new(b"nizk_example");
-    proof.verify(comm, &assignment_inps, &mut verifier_transcript, gens).is_ok()
+    let start = quanta::Instant::now();
+    let res = proof.verify(comm, &assignment_inps, &mut verifier_transcript, gens).is_ok();
+    let dur = quanta::Instant::now() - start;
+    info!("Done verified in {}: {}", dur.as_secs_f64(), if res {"valid"} else {"invalid"});
+    res
 }
