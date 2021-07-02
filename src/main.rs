@@ -6,6 +6,7 @@ mod nn;
 mod scalar;
 mod io;
 mod serialize;
+pub mod util;
 
 use core::panic;
 use std::path::Path;
@@ -15,8 +16,9 @@ use libspartan::NIZK;
 use nn::{NeuralNetworkType};
 use clap::{Arg, App, SubCommand};
 use curve25519_dalek::scalar::Scalar;
+use r1cs::elliptic_curve;
 
-use crate::nn::zk::ProofType;
+use crate::{io::load_scalar_array, nn::zk::ProofType, r1cs::elliptic_curve::{elliptic_add, elliptic_mul}};
 use simplelog::*;
 
 fn main() {
@@ -35,6 +37,7 @@ fn main() {
                                     .arg(Arg::with_name("compress").long("compress").short("c")
                                             .default_value("3")
                                             .takes_value(true)
+                                            .allow_hyphen_values(true)
                                             .help("Compress level"))
                                     .arg(Arg::with_name("accuracy").short("a").long("accuracy").help("Generate circuit for the zknet accuracy")))
                             .subcommand(SubCommand::with_name("gen_open")
@@ -69,6 +72,7 @@ fn main() {
                                     .arg(Arg::with_name("compress").long("compress").short("c")
                                             .default_value("3")
                                             .takes_value(true)
+                                            .allow_hyphen_values(true)
                                             .help("Compress level"))
                                     .arg(Arg::with_name("verify").long("verify")
                                             .help("Verify the generated value")))
@@ -168,14 +172,63 @@ fn main() {
         ("verify", Some(m)) => {
             let nn = io::zknet_load(m.value_of("CIRCUIT_PATH").unwrap());
             let (inst, gens) = nn.get_nizk_instance();
+            let commit_params = nn.get_commit_pq_address();
+
+            info!("{}", if let Some(_) = commit_params {
+                "Accuracy mode"
+            } else {
+                "Infer mode"
+            });
+
+            let mut point: [Scalar; 2] = elliptic_curve::get_id();
+            let param_a = elliptic_curve::get_a();
+            let param_d = elliptic_curve::get_d();
             let proves = nn::zk::get_proves(m.value_of("PROOF_PATH").unwrap(),m.value_of("IO_PATH").unwrap());
+            let total_sample = proves.len();
+            if total_sample == 0{
+                error!("No sample to verify");
+                panic!();
+            }
+
+            let mut p_vec: Vec<[Scalar;2]> = Vec::new();
+            let mut q_vec: Vec<[Scalar;2]> = Vec::new();
+
             for (proof, io, proof_type, id) in proves {
                 info!("Verify proof for sample {}", id);
+                let inps: Vec<[u8; 32]> = load_scalar_array(&io).unwrap().to_vec();
+                if let Some(pos) = &commit_params {
+                    let [commit, p, q] = &pos;
+                    point = elliptic_add(&point, &[Scalar::from_bits(inps[commit[0]]), Scalar::from_bits(inps[commit[1]])], param_a, param_d);
+                    p_vec.push([Scalar::from_bits(inps[p[0]]), Scalar::from_bits(inps[p[1]])]);
+                    q_vec.push([Scalar::from_bits(inps[q[0]]), Scalar::from_bits(inps[q[1]])]);
+                };
+                info!("Done load io");
                 match proof_type {
                     ProofType::NIZK => {
-                        nn::zk::verify_nizk(&inst, &gens, io::load_from_file::<NIZK>(&proof).unwrap(), &io);
+                        nn::zk::verify_nizk(&inst, &gens, io::load_from_file::<NIZK>(&proof).unwrap(), &inps);
                     }
                     _ => {}
+                }
+            }
+            if let Some(_) = commit_params {
+                debug!("Reference point {:?}", point);
+                if !util::all_same(&p_vec) ||  !util::all_same(&q_vec){
+                    error!("p and q are not equal across all samples");
+                    panic!();
+                }
+                let p = p_vec[0];
+                let q = q_vec[0];
+                let info_path = Path::new(m.value_of("IO_PATH").unwrap());
+                let agg_open: Scalar = io::load_from_file( info_path.join("open_accuracy").to_str().unwrap()).unwrap();
+                let total_correct: u32 = io::load_from_file( info_path.join("total_correct").to_str().unwrap()).unwrap();
+                let mul_p = elliptic_mul(&p, agg_open, param_a, param_d);
+                debug!("open * p {:?}", mul_p);
+                let mul_q = elliptic_mul(&q, Scalar::from(total_correct), param_a, param_d);
+                debug!("correct * q {:?}", mul_q);
+                let sum_pq = elliptic_add(&mul_p, &mul_q, param_a, param_d);
+                debug!("sum p q {:?}", sum_pq);
+                if sum_pq == point {
+                    info!("Accuracy verified {}/{}", total_correct, total_sample);
                 }
             }
         }

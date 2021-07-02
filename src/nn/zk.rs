@@ -1,4 +1,3 @@
-
 use itertools::Itertools;
 use libspartan::{ComputationCommitment, ComputationDecommitment, Instance, NIZK, NIZKGens, SNARK, SNARKGens, VarsAssignment};
 
@@ -134,11 +133,9 @@ pub fn prove_nizk(inst: &Instance, gens: &NIZKGens, witness_path: &str, io_path:
     info!("Writen nizk proof to {}", save_path);
 }
 
-pub fn verify_nizk(inst: &Instance, gens: &NIZKGens, proof: NIZK, io_path: &str) -> bool {
-    let inps: Vec<[u8; 32]> = load_scalar_array(io_path).unwrap().to_vec();
+pub fn verify_nizk(inst: &Instance, gens: &NIZKGens, proof: NIZK, inps: &Vec<[u8; 32]>) -> bool {
     let assignment_inps = VarsAssignment::new(&inps).unwrap();
     let mut verifier_transcript = Transcript::new(b"nizk_example");
-    info!("Done loading data");
     let res = proof.verify(inst, &assignment_inps, &mut verifier_transcript, gens).is_ok();
     info!("Done verified: {}", if res {"valid"} else {"invalid"});
     res
@@ -165,8 +162,7 @@ pub fn prove_snark(inst: &Instance, gens: &SNARKGens, decomm: &ComputationDecomm
     info!("Writen snark  proof to {}", save_path);
 }
 
-pub fn verify_snark(gens: &SNARKGens, comm: &ComputationCommitment, proof: SNARK, io_path: &str) -> bool {
-    let inps: Vec<[u8; 32]> = load_scalar_array(io_path).unwrap().to_vec();
+pub fn verify_snark(gens: &SNARKGens, comm: &ComputationCommitment, proof: SNARK, inps: &Vec<[u8; 32]>) -> bool {
     let assignment_inps = VarsAssignment::new(&inps).unwrap();
     let mut verifier_transcript = Transcript::new(b"nizk_example");
     proof.verify(comm, &assignment_inps, &mut verifier_transcript, gens).is_ok()

@@ -95,8 +95,9 @@ pub fn run_acc(network: &NeuralNetwork, memory: &mut [Scalar],  commit_open: Sca
         all_hash.push(hash);
     }
 
-    for r in 1..all_hash.len() {
-        assert_eq!(all_hash[r], all_hash[r-1]);
+    if !crate::util::all_same(&all_hash) {
+        error!("Hashes are not the same! Bugs!");
+        panic!();
     }
 
     debug!("Hash value:");

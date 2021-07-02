@@ -1,7 +1,9 @@
 use crate::r1cs::ConstraintSystem;
 use crate::r1cs::{TensorAddress, ActivationFunction};
 use std::cmp::max;
+use std::convert::TryInto;
 use std::path::Path;
+use itertools::Itertools;
 use serde_pickle::from_reader;
 use std::fs::File;
 use crate::scalar::Scalar;
@@ -118,7 +120,9 @@ struct AccuracyParams {
     ground_truth: TensorAddress,
     result_open: TensorAddress,
     p: TensorAddress,
-    q: TensorAddress
+    q: TensorAddress,
+
+    output: TensorAddress
 }
 
 pub struct NeuralNetwork {
@@ -157,6 +161,18 @@ pub enum NeuralNetworkType {
 
 
 impl NeuralNetwork {
+    pub fn get_commit_pq_address(&self) -> Option<[[usize; 2];3]> {
+        if let Some(acc) = &self.acc {
+            Some([
+                self.cons.mem[acc.output].iter().map(|x|  x as usize).collect_vec().try_into().unwrap(),
+                self.cons.mem[acc.p].iter().map(|x|  x as usize).collect_vec().try_into().unwrap(),
+                self.cons.mem[acc.q].iter().map(|x|  x as usize).collect_vec().try_into().unwrap(),
+            ])
+        } else {
+            None
+        }
+    }
+
     pub fn load_weight<T: Scalar>(&self, file: &str) -> Vec<T> {
         let w = File::open(file).unwrap();
         let weight: HashMap<String, Vec<i32>>= from_reader(w).unwrap();

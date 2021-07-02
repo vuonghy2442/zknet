@@ -15,7 +15,6 @@ impl NeuralNetwork {
     pub fn new_nin(accuracy: bool) -> NeuralNetwork {
         let mut c = ConstraintSystem::new();
         let input = c.mem.alloc(&[3,32,32]);
-        c.log_cons("input");
         let (conv1_out, conv1_weight, conv1_bias) = padded_convolution_layer(&mut c, input, [5,5], 192, 0);
         c.log_cons("conv1");
         let conv1_out_sign = sign_activation(&mut c, conv1_out, 16);
@@ -105,7 +104,8 @@ impl NeuralNetwork {
                 ground_truth,
                 result_open,
                 p,
-                q
+                q,
+                output: commited_result
             }))
         } else {
             c.reorder_for_spartan(&[input, nn_output, hash_output]);

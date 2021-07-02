@@ -15,7 +15,6 @@ impl NeuralNetwork {
     pub fn new_lenet(accuracy: bool) -> NeuralNetwork {
         let mut c = ConstraintSystem::new();
         let input = c.mem.alloc(&[1,28,28]);
-        c.log_cons("input");
         let (conv1_out, conv1_weight, conv1_bias) = convolution_layer(&mut c, input, [5,5], 20, 0); // 24 x 24
         c.log_cons("conv1");
         let conv1_out_sign = sign_activation(&mut c, conv1_out, 22);
@@ -70,7 +69,8 @@ impl NeuralNetwork {
                 ground_truth,
                 result_open,
                 p,
-                q
+                q,
+                output: commited_result
             }))
         } else {
             c.reorder_for_spartan(&[input, fc2_out, hash_output]);

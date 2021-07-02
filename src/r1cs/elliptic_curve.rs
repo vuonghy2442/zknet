@@ -23,6 +23,10 @@ pub fn get_d<T: Scalar>() -> T {
     T::from_i32(1408)
 }
 
+pub fn get_id<T: Scalar>() -> [T; 2] {
+    [T::zero(), T::one()]
+}
+
 pub fn elliptic_add<T: Scalar>(a: &[T], b: &[T], param_a: T, param_d: T) -> [T; 2] {
     let (t0,t1,t2,t3) = (a[0] * b[1],a[1]*b[0], a[1]*b[1], a[0]*b[0] * param_a);
     let t4 = t0 * t1 * param_d;
