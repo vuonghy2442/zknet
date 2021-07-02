@@ -81,6 +81,7 @@ impl MySerialize for ConstraintSystem {
             b: Vec::<(u32, u32, Scalar)>::my_deserialize(r),
             c: Vec::<(u32, u32, Scalar)>::my_deserialize(r),
             n_cons: u32::my_deserialize(r),
+            prev_cons: 0,
             mem: MemoryManager::my_deserialize(r),
             compute: Vec::<(Box<[u32]>, Functions)>::my_deserialize(r),
         }

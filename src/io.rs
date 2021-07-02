@@ -1,4 +1,4 @@
-use std::{fs::File, io::{BufWriter, Read}};
+use std::{fs::File, io::{BufWriter}};
 
 use bincode::{deserialize_from, serialize_into};
 use curve25519_dalek::scalar::Scalar;
@@ -11,27 +11,36 @@ use crate::{nn::{NeuralNetwork}, serialize::MySerialize};
 pub fn zknet_save(network: &NeuralNetwork, path: &str, compress_level: i32) {
     let f = BufWriter::new(File::create(path).unwrap());
     let mut f_comp = zstd::stream::Encoder::new(f, compress_level).unwrap();
+    info!("Save the neural network to {} with compression {}", path, compress_level);
     network.my_serialize(& mut f_comp);
     f_comp.finish().unwrap();
+    info!("Done saving the neural network");
 }
 
 pub fn zknet_load(path: &str) -> NeuralNetwork  {
-    println!("Load neural network from {}", path);
+    info!("Load neural network from {}", path);
     let f = File::open(path).unwrap();
     let mut f_comp = zstd::stream::Decoder::new(f).unwrap();
-    NeuralNetwork::my_deserialize(&mut f_comp)
+    let res = NeuralNetwork::my_deserialize(&mut f_comp);
+    info!("Done loading neural network");
+    res
 }
 
 pub fn generate_open(message: Option<&str>) -> Scalar {
-    match message {
+    let res = match message {
         Some(m) => {
+            info!("Generate open from message {}", m);
             Scalar::hash_from_bytes::<Sha512>(m.as_bytes())
         }
         None => {
+            info!("Generate open randomly");
             let mut rng = rand::thread_rng();
             Scalar::random(&mut rng)
         }
-    }
+    };
+    debug!("Generated open {:?}", res.as_bytes());
+    res
+
 }
 
 pub fn save_to_file<T:Serialize>(obj: T, path: &str) -> bincode::Result<()> {

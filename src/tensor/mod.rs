@@ -2,7 +2,6 @@ mod tensor_serialize;
 
 use std::iter::Iterator;
 use std::ops::{Range, RangeFrom, RangeTo};
-use serde::{Serialize, Deserialize};
 use itertools::Itertools;
 
 #[derive(Clone, Debug)]
@@ -14,7 +13,7 @@ pub enum TensorIndex {
     Id(u32)
 }
 
-#[derive(Clone,Debug,Serialize,Deserialize)]
+#[derive(Clone,Debug)]
 pub struct VariableTensor {
     pub start: u32,
     pub dim: Box<[u32]>,

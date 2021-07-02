@@ -6,7 +6,6 @@ use serde_pickle::from_reader;
 use std::fs::File;
 use crate::scalar::Scalar;
 use std::collections::HashMap;
-use serde::{Serialize, Deserialize};
 
 mod lenet;
 mod nin;
@@ -115,7 +114,6 @@ fn linear_compact(c: &mut ConstraintSystem, input: TensorAddress, n_feature: u32
     return (res, output, weight, bias);
 }
 
-#[derive(Serialize,Deserialize)]
 struct AccuracyParams {
     ground_truth: TensorAddress,
     result_open: TensorAddress,
@@ -123,7 +121,6 @@ struct AccuracyParams {
     q: TensorAddress
 }
 
-#[derive(Serialize,Deserialize)]
 pub struct NeuralNetwork {
     cons: ConstraintSystem,
     weight_map: HashMap<String, TensorAddress>,
@@ -189,7 +186,7 @@ impl NeuralNetwork {
         self.cons.load_memory(self.commit_open, var_dict, commit_open);
         self.cons.compute(var_dict);
 
-        println!("Done compute");
+        info!("Done computing");
 
         let mut res = Vec::with_capacity(self.cons.mem[self.output].size() as usize);
         for c in self.cons.mem[self.output].iter() {
@@ -203,7 +200,7 @@ impl NeuralNetwork {
 
         if verify {
             assert!(self.cons.verify(&T::to_big_scalar(&var_dict)));
-            println!("Verified");
+            info!("Verified");
         }
         (res, hash)
     }

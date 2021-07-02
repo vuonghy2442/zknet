@@ -74,7 +74,7 @@ pub fn run_acc(network: &NeuralNetwork, memory: &mut [Scalar],  commit_open: Sca
     let mut agg_open = Scalar::zero(); //public
     let mut total_correct: u32 = 0;
     for &i in id {
-        println!("Run for sample {}", i);
+        info!("Run for sample {}", i);
         let result_open = generate_result_open(&mut rng); //private
         agg_open = sum_open(agg_open, result_open);
         let cur_open = elliptic_curve::elliptic_mul(&p, result_open, param_a, param_d);
@@ -99,11 +99,11 @@ pub fn run_acc(network: &NeuralNetwork, memory: &mut [Scalar],  commit_open: Sca
         assert_eq!(all_hash[r], all_hash[r-1]);
     }
 
-    println!("Hash value:");
+    debug!("Hash value:");
     for r in &all_hash[0] {
-        println!("{:#?}", r);
+        debug!("{:?}", r.as_bytes());
     }
-    println!("The accuracy is  {}/{}", total_correct, id.len());
+    info!("The accuracy is  {}/{}", total_correct, id.len());
 
     io::save_scalar_array(&all_hash[0], save_path.join("hash").to_str().unwrap(), 0).unwrap();
     io::save_to_file(agg_open, save_path.join("open_accuracy").to_str().unwrap()).unwrap();
@@ -129,16 +129,15 @@ fn softmax(x: &mut [f64]) {
 }
 
 fn print_result(result: &[Scalar], truth: u8, scaling: f64) {
-
-    println!("Predicted result:");
-
     let result = crate::scalar::to_vec_i32(&result);
     let mut prob = Vec::new();
-    for (i, &r) in result.iter().enumerate(){
-        println!("Raw {}: {}", i, r);
+    debug!("raw {:?}", &result);
+    for r in result{
         prob.push(r as f64/ scaling);
     }
     softmax(&mut prob);
+
+    println!("Predicted result:");
     for (i,r) in prob.iter().enumerate() {
         println!("Prob {}: {}", i, r);
     }
@@ -151,7 +150,7 @@ pub fn run_infer(network: &NeuralNetwork, memory: &mut [Scalar],  commit_open: S
     let mut all_result: Vec<Vec<Scalar>> = Vec::new();
     let mut all_hash: Vec<Vec<Scalar>> = Vec::new();
     for &i in id {
-        println!("Run for sample {}", i);
+        info!("Run for sample {}", i);
 
         let (result, hash) = network.run(memory, &slice_to_scalar(&dataset[i]), None, &[commit_open], verify);
         print_result(&result, truth[i], network.scaling);
@@ -166,9 +165,9 @@ pub fn run_infer(network: &NeuralNetwork, memory: &mut [Scalar],  commit_open: S
         assert_eq!(all_hash[r], all_hash[r-1]);
     }
 
-    println!("Hash value:");
+    debug!("Hash value:");
     for r in &all_hash[0] {
-        println!("{:#?}", r);
+        debug!("{:?}", r.as_bytes());
     }
 
     io::save_scalar_array(&all_hash[0], save_path.join("hash").to_str().unwrap(), 0).unwrap();
@@ -177,9 +176,9 @@ pub fn run_infer(network: &NeuralNetwork, memory: &mut [Scalar],  commit_open: S
 impl NeuralNetwork {
     pub fn run_dataset(&self, commit_open: Scalar, weight: &str, dataset: &str, id: &[usize], verify: bool, save_path: &str, compress_level: i32) {
         let mut memory = self.load_weight::<Scalar>(weight);
-        println!("Done load weight");
+        info!("Done loading weight");
         let (dataset, truth) = nn::load_dataset(dataset);
-        println!("Done load dataset");
+        info!("Done loading dataset");
         if let Some(_) = self.acc {
             run_acc(self, &mut memory, commit_open, dataset, truth, id, verify, save_path, compress_level)
         } else {

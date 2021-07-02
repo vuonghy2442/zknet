@@ -15,49 +15,48 @@ impl NeuralNetwork {
     pub fn new_nin(accuracy: bool) -> NeuralNetwork {
         let mut c = ConstraintSystem::new();
         let input = c.mem.alloc(&[3,32,32]);
-        // let input_cons = c.cons_size();
+        c.log_cons("input");
         let (conv1_out, conv1_weight, conv1_bias) = padded_convolution_layer(&mut c, input, [5,5], 192, 0);
-        // let conv1_cons = c.cons_size();
+        c.log_cons("conv1");
         let conv1_out_sign = sign_activation(&mut c, conv1_out, 16);
-        println!("Constraints {}", c.cons_size());
-
-        // let conv1_sign_cons = c.cons_size();
+        c.log_cons("conv1_sign");
         let (conv1_a_out, conv1_a_weight, conv1_a_bias) = convolution_layer_act_compact(&mut c, conv1_out_sign, [1,1], 160, 0, 9, ActivationFunction::Sign);
-        println!("Constraints {}", c.cons_size());
-
+        c.log_cons("conv1_a+sign");
         let (conv1_b_out, conv1_b_weight, conv1_b_bias) = convolution_layer_act_compact(&mut c, conv1_a_out, [1,1], 96, 0, 9,ActivationFunction::Sign);
-        println!("Constraints {}", c.cons_size());
+        c.log_cons("conv1_b+sign");
 
         let pool1 = max_pool(&mut c, conv1_b_out); // 16 x 16
+        c.log_cons("pool1");
+
         let (conv2_out, conv2_weight, conv2_bias) = padded_convolution_layer_act_compact(&mut c, pool1, [5,5], 192, 0, 11, ActivationFunction::Sign);
+        c.log_cons("conv2+sign");
         let (conv2_a_out, conv2_a_weight, conv2_a_bias) = convolution_layer_act_compact(&mut c, conv2_out, [1,1], 192, 0, 9, ActivationFunction::Sign);
+        c.log_cons("conv2_a+sign");
         let (conv2_b_out, conv2_b_weight, conv2_b_bias) = convolution_layer_act_compact(&mut c, conv2_a_out, [1,1], 192, 0, 9, ActivationFunction::Sign);
-
-        println!("Constraints {}", c.cons_size());
-
+        c.log_cons("conv2_b+sign");
 
         let pool2 = max_pool(&mut c, conv2_b_out); // 8 x 8 //average pool instead but whatever lol
+        c.log_cons("pool2");
 
         let (conv3_out, conv3_weight, conv3_bias) = padded_convolution_layer_act_compact(&mut c, pool2, [3, 3], 192, 0, 12, ActivationFunction::Sign);
+        c.log_cons("conv3+sign");
         let (conv3_a_out, conv3_a_weight, conv3_a_bias) = convolution_layer_act_compact(&mut c, conv3_out, [1,1], 192, 0, 9, ActivationFunction::Relu);
+        c.log_cons("conv3_a+relu");
         let (conv3_b_out, conv3_b_weight, conv3_b_bias) = convolution_layer_act_compact(&mut c, conv3_a_out, [1,1], 10, 0, 20, ActivationFunction::Relu);
-
-        println!("Constraints {}", c.cons_size());
-
+        c.log_cons("conv3_b+relu");
 
         let pool3 = sum_pool(&mut c, conv3_b_out, [8,8]);
+        c.log_cons("sum_pool");
+
         let nn_output = c.mem.save(c.mem[pool3].flatten());
 
         let conv1_weight_packed = c.packing_and_check_range(conv1_weight, 6);
         let conv1_bias_packed = c.packing_and_check_range(conv1_bias, 14);
         let conv1_a_weight_packed = c.packing_and_check_range(conv1_a_weight, 1);
         let conv1_a_bias_packed = c.packing_and_check_range(conv1_a_bias, 6);
-        println!("Constraints {}", c.cons_size());
-
         let conv1_b_weight_packed = c.packing_and_check_range(conv1_b_weight, 1);
         let conv1_b_bias_packed = c.packing_and_check_range(conv1_b_bias, 7);
-
-        println!("Constraints {}", c.cons_size());
+        c.log_cons("conv1x_packing");
 
         let conv2_weight_packed = c.packing_and_check_range(conv2_weight, 1);
         let conv2_bias_packed = c.packing_and_check_range(conv2_bias, 9);
@@ -65,8 +64,7 @@ impl NeuralNetwork {
         let conv2_a_bias_packed = c.packing_and_check_range(conv2_a_bias, 8);
         let conv2_b_weight_packed = c.packing_and_check_range(conv2_b_weight, 1);
         let conv2_b_bias_packed = c.packing_and_check_range(conv2_b_bias, 7);
-
-        println!("Constraints {}", c.cons_size());
+        c.log_cons("conv2x_packing");
 
         let conv3_weight_packed = c.packing_and_check_range(conv3_weight, 1);
         let conv3_bias_packed = c.packing_and_check_range(conv3_bias, 10);
@@ -74,10 +72,7 @@ impl NeuralNetwork {
         let conv3_a_bias_packed = c.packing_and_check_range(conv3_a_bias, 3);
         let conv3_b_weight_packed = c.packing_and_check_range(conv3_b_weight, 13);
         let conv3_b_bias_packed = c.packing_and_check_range(conv3_b_bias, 14);
-
-        println!("Constraints {}", c.cons_size());
-
-        // let packed_cons = c.cons_size();
+        c.log_cons("conv3x_packing");
 
         let commit_open = c.mem.alloc(&[1]);
 
@@ -85,7 +80,7 @@ impl NeuralNetwork {
             conv1_weight_packed, conv1_bias_packed, conv1_a_weight_packed, conv1_a_bias_packed, conv1_b_weight_packed, conv1_b_bias_packed,
             conv2_weight_packed, conv2_bias_packed, conv2_a_weight_packed, conv2_a_bias_packed, conv2_b_weight_packed, conv2_b_bias_packed,
             conv3_weight_packed, conv3_bias_packed, conv3_a_weight_packed, conv3_a_bias_packed, conv3_b_weight_packed, conv3_b_bias_packed]);
-        // let hash_cons = c.cons_size();
+        c.log_cons("hashing");
 
         let (output, acc) = if accuracy {
             let p = c.mem.alloc(&[2]);
@@ -102,7 +97,8 @@ impl NeuralNetwork {
             c.is_max(nn_output, c.mem[value].begin(), c.mem[result].begin(), 20);
             c.elliptic_mul(&c.mem[p].to_vec(), c.mem[result_open].begin(), &c.mem[mul_p].to_vec(), get_a(), get_d());
             c.elliptic_add_cond(&c.mem[mul_p].to_vec(), &c.mem[q].to_vec(), &c.mem[commited_result].to_vec(), c.mem[result].begin(), get_a(), get_d());
-            // println!("accuracy constraints {}", c.cons_size() - hash_cons);
+            c.log_cons("accuracy");
+
 
             c.reorder_for_spartan(&[input, ground_truth, commited_result, hash_output, p, q]);
             (result, Some(AccuracyParams{
@@ -117,7 +113,7 @@ impl NeuralNetwork {
         };
         c.sort_cons();
 
-        println!("Constraints {}", c.cons_size());
+        info!("Constraints {}", c.cons_size());
 
         let weight_map: HashMap<String, TensorAddress> = hashmap!{
             String::from("conv1_weight") => conv1_weight,

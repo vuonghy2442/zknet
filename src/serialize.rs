@@ -1,3 +1,4 @@
+
 pub trait MySerialize {
     fn my_serialize<W: std::io::Write>(&self, w : &mut W);
     fn my_deserialize<R: std::io::Read>(r : &mut R) -> Self;
@@ -120,15 +121,4 @@ pub unsafe fn any_slice_as_u8_slice_mut<T: Sized>(p: &mut [T]) -> &mut [u8] {
         (&mut p[0] as *mut T) as *mut u8,
         ::std::mem::size_of::<T>() * p.len(),
     )
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-    #[test]
-    pub fn test_to_slice() {
-        let test: usize = 1387294387;
-        let huhu = unsafe{any_as_u8_slice(&test)};
-        println!("{:#?}", huhu);
-    }
 }

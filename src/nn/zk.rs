@@ -19,7 +19,7 @@ impl NeuralNetwork {
     pub fn get_nizk_instance(&self) -> (Instance, NIZKGens) {
         let inst = self.cons.get_spartan_instance();
         let gens = NIZKGens::new(self.cons.cons_size() as usize,  self.cons.get_num_vars(), self.cons.get_num_inputs());
-        println!("Done encoding nizk");
+        info!("Done encoding nizk");
         (inst, gens)
     }
 
@@ -27,7 +27,7 @@ impl NeuralNetwork {
         let inst = self.cons.get_spartan_instance();
         let gens = SNARKGens::new(self.cons.cons_size() as usize,   self.cons.get_num_vars(), self.cons.get_num_inputs(),self.cons.get_non_zeros());
         let (comm, decomm) = SNARK::encode(&inst, &gens);
-        println!("Done encoding snark");
+        info!("Done encoding snark");
         (inst,gens,comm,decomm)
     }
 }
@@ -117,7 +117,7 @@ pub fn prove_nizk(inst: &Instance, gens: &NIZKGens, witness_path: &str, io_path:
     let assignment_vars = VarsAssignment::new(&vars).unwrap();
     let assignment_inps = VarsAssignment::new(&inps).unwrap();
 
-    println!("[+] Calculating proof for sample {}", id);
+    info!("[+] Calculating nizk proof for sample {}", id);
     let mut prover_transcript = Transcript::new(b"nizk_example");
     let proof = NIZK::prove(
         &inst,
@@ -128,7 +128,7 @@ pub fn prove_nizk(inst: &Instance, gens: &NIZKGens, witness_path: &str, io_path:
     );
 
     io::save_to_file(proof, save_path).unwrap();
-    println!("[+] Writen proof to {}", save_path);
+    info!("[+] Writen nizk proof to {}", save_path);
 }
 
 pub fn verify_nizk(inst: &Instance, gens: &NIZKGens, proof: NIZK, io_path: &str) -> bool {
@@ -144,7 +144,7 @@ pub fn prove_snark(inst: &Instance, gens: &SNARKGens, decomm: &ComputationDecomm
     let assignment_vars = VarsAssignment::new(&vars).unwrap();
     let assignment_inps = VarsAssignment::new(&inps).unwrap();
 
-    println!("[+] Calculating proof for sample {}", id);
+    info!("[+] Calculating snark proof for sample {}", id);
     let mut prover_transcript = Transcript::new(b"nizk_example");
     let proof = SNARK::prove(
         &inst,
@@ -156,7 +156,7 @@ pub fn prove_snark(inst: &Instance, gens: &SNARKGens, decomm: &ComputationDecomm
     );
 
     io::save_to_file(proof, save_path).unwrap();
-    println!("[+] Writen proof to {}", save_path);
+    info!("[+] Writen snark proof to {}", save_path);
 }
 
 pub fn verify_snark(gens: &SNARKGens, comm: &ComputationCommitment, proof: SNARK, io_path: &str) -> bool {

@@ -7,7 +7,6 @@ use std::cmp::{min, max};
 use std::usize;
 use curve25519_dalek::scalar::Scalar as BigScalar;
 use crate::scalar::{self, SCALAR_SIZE, Scalar, power_of_two, scalar_to_vec_u32};
-use serde::{Serialize, Deserialize};
 
 mod conv2d_compact;
 mod conv2d_padded_compact;
@@ -49,7 +48,6 @@ impl<T:Scalar> Functional for T {
     ];
 }
 
-#[derive(Serialize, Deserialize)]
 pub struct MemoryManager {
     mem_dict: Vec<VariableTensor>,
     n_var: u32,
@@ -91,12 +89,12 @@ impl Index<TensorAddress> for MemoryManager {
     }
 }
 
-#[derive(Serialize, Deserialize)]
 pub struct ConstraintSystem {
     a: Vec<(u32, u32, BigScalar)>,
     b: Vec<(u32, u32, BigScalar)>,
     c: Vec<(u32, u32, BigScalar)>,
     n_cons: u32,
+    prev_cons: u32,
     pub mem: MemoryManager,
     compute: Vec<(Box<[u32]>, Functions)>
 }
@@ -107,7 +105,7 @@ pub enum ActivationFunction {
     Relu
 }
 
-#[derive(Copy, Clone, Serialize, Deserialize)]
+#[derive(Copy, Clone)]
 enum Functions {
     Sum = 0,
     Mul = 1,
@@ -135,6 +133,7 @@ impl ConstraintSystem {
             b: Vec::new(),
             c: Vec::new(),
             n_cons: 0,
+            prev_cons: 0,
             mem: MemoryManager::new(),
             compute: Vec::new()
         }
@@ -265,12 +264,12 @@ impl ConstraintSystem {
                 count_c += 1;
             }
             if count_a == 0 || count_b == 0 || count_c == 0 {
-                println!("Warning weird condition {}", i);
+                warn!("Warning weird condition {}", i);
             }
             if sa * sb != sc {
-                println!("Constraint {}", i);
-                println!("{} {} {}", self.a[ai-1].1, self.b[bi-1].1, self.c[ci-1].1);
-                println!("{:#?} {:#?} {:#?}", sa, sb, sc);
+                error!("Constraint {}", i);
+                error!("At {} {} {}", self.a[ai-1].1, self.b[bi-1].1, self.c[ci-1].1);
+                error!("Value {:?} {:?} {:?}", sa.as_bytes(), sb.as_bytes(), sc.as_bytes());
                 return false;
             }
         }
@@ -768,6 +767,11 @@ impl ConstraintSystem {
                 None => self.dot(weight,input, self.mem[output].at_idx(&[i]), None)
             }
         }
+    }
+
+    pub fn log_cons(&mut self, name: &str) {
+        debug!("Constraints of {}: {}", name, self.n_cons - self.prev_cons);
+        self.prev_cons = self.n_cons;
     }
 }
 

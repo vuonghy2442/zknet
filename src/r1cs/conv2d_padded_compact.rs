@@ -137,7 +137,6 @@ impl ConstraintSystem {
         //extract left and right sign part
         // waste a bit of constraints here for the sign :(
         if let Some(e) = ext_left {
-            println!("{:#?}", self.mem[e].dim);
             extract_sign_part(self,e, bit_length);
         }
 

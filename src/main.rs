@@ -1,3 +1,5 @@
+#[macro_use] extern crate log;
+
 mod tensor;
 mod r1cs;
 mod nn;
@@ -5,6 +7,7 @@ mod scalar;
 mod io;
 mod serialize;
 
+use core::panic;
 use std::path::Path;
 
 use itertools::Itertools;
@@ -14,11 +17,13 @@ use clap::{Arg, App, SubCommand};
 use curve25519_dalek::scalar::Scalar;
 
 use crate::nn::zk::ProofType;
+use simplelog::*;
 
 fn main() {
-    let matches = App::new("Zero knowledge network").version("0.1")
+    let matches = App::new("Zero knowledge network").version("0.1").setting(clap::AppSettings::ArgRequiredElseHelp)
                             .author("Hy Vuong, Lam Nguyen")
                             .about("Compile binary neural networks to R1CS")
+                            .arg(Arg::with_name("verbose").short("v").multiple(true))
                             .subcommand(SubCommand::with_name("generate")
                                     .about("Generate R1CS and computation circuit from example binary neural network")
                                     .arg(Arg::with_name("BNN_TYPE")
@@ -93,6 +98,16 @@ fn main() {
                                             .required(true)
                                             .help("Path to IO path (witness folder)"))).get_matches();
 
+    let level = match matches.occurrences_of("verbose") {
+        0 => simplelog::LevelFilter::Warn,
+        1 => simplelog::LevelFilter::Info,
+        2 => simplelog::LevelFilter::Debug,
+        _ => simplelog::LevelFilter::Debug
+    };
+
+    simplelog::TermLogger::init(level, Config::default(), TerminalMode::Mixed, simplelog::ColorChoice::Auto).unwrap();
+
+
     match matches.subcommand() {
         ("generate", Some(m)) => {
             let nn_type = match m.value_of("BNN_TYPE").unwrap() {
@@ -102,11 +117,10 @@ fn main() {
                 "nin" => {
                     NeuralNetworkType::NetworkInNetwork
                 }
-                _ => {panic!("Unknown neural network type")}
+                x => {error!("Unknown neural network type {}", x); panic!()}
             };
             let acc = m.is_present("accuracy");
             let nn = nn::NeuralNetwork::zknet_factory(nn_type, acc);
-            println!("Saving the network");
             io::zknet_save(
                 &nn,
                 m.value_of("OUTPUT").unwrap(),
@@ -119,7 +133,6 @@ fn main() {
         },
         ("run", Some(m)) => {
             let nn = io::zknet_load(m.value_of("CIRCUIT_PATH").unwrap());
-            println!("Done loading neural network");
             let open: Scalar = io::load_from_file(m.value_of("OPEN_PATH").unwrap()).unwrap();
             let weight_path: &str = m.value_of("WEIGHT_PATH").unwrap();
             let dataset_path: &str = m.value_of("DATASET_PATH").unwrap();
@@ -131,7 +144,6 @@ fn main() {
         },
         ("proof", Some(m)) => {
             let nn = io::zknet_load(m.value_of("CIRCUIT_PATH").unwrap());
-            println!("Done loading neural network");
 
             let witness_path: &str = m.value_of("WITNESS_PATH").unwrap();
             let output_path: &Path = Path::new(m.value_of("OUTPUT_PATH").unwrap());
@@ -144,11 +156,10 @@ fn main() {
                     }
                 },
                 Some("snark") => {
-                    let (inst,gens, comm,decomm) = nn.get_snark_instance();
+                    let (inst, gens, comm, decomm) = nn.get_snark_instance();
                     for (witness, io, id) in witnesses {
                         nn::zk::prove_snark(&inst, &gens, &decomm, &witness, &io, id, output_path.join(format!("proof_snark_{}", id)).to_str().unwrap())
                     }
-
                 },
                 _ => {}
             }
@@ -157,10 +168,9 @@ fn main() {
         ("verify", Some(m)) => {
             let nn = io::zknet_load(m.value_of("CIRCUIT_PATH").unwrap());
             let (inst, gens) = nn.get_nizk_instance();
-            println!("Done loading neural network");
             let proves = nn::zk::get_proves(m.value_of("PROOF_PATH").unwrap(),m.value_of("IO_PATH").unwrap());
             for (proof, io, proof_type, id) in proves {
-                println!("Verify proof for sample {}", id);
+                info!("Verify proof for sample {}", id);
                 match proof_type {
                     ProofType::NIZK => {
                         nn::zk::verify_nizk(&inst, &gens, io::load_from_file::<NIZK>(&proof).unwrap(), &io);
