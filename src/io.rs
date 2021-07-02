@@ -1,4 +1,4 @@
-use std::{fs::File, io::{BufWriter}};
+use std::{fs::File, io::{BufWriter, Read}};
 
 use bincode::{deserialize_from, serialize_into};
 use curve25519_dalek::scalar::Scalar;
@@ -6,19 +6,20 @@ use serde::{Serialize, de::DeserializeOwned};
 use zstd;
 use sha2::Sha512;
 
-use crate::nn::{NeuralNetwork};
+use crate::{nn::{NeuralNetwork}, serialize::MySerialize};
 
-pub fn zknet_save(network: &NeuralNetwork, path: &str, compress_level: i32) -> bincode::Result<()> {
+pub fn zknet_save(network: &NeuralNetwork, path: &str, compress_level: i32) {
     let f = BufWriter::new(File::create(path).unwrap());
     let mut f_comp = zstd::stream::Encoder::new(f, compress_level).unwrap();
-    let result = serialize_into(&mut f_comp, &network);
+    network.my_serialize(& mut f_comp);
     f_comp.finish().unwrap();
-    result
 }
 
-pub fn zknet_load(path: &str) -> bincode::Result<NeuralNetwork>  {
-    let f_comp = zstd::stream::Decoder::new(File::open(path).unwrap()).unwrap();
-    bincode::deserialize_from(f_comp)
+pub fn zknet_load(path: &str) -> NeuralNetwork  {
+    println!("Load neural network from {}", path);
+    let f = File::open(path).unwrap();
+    let mut f_comp = zstd::stream::Decoder::new(f).unwrap();
+    NeuralNetwork::my_deserialize(&mut f_comp)
 }
 
 pub fn generate_open(message: Option<&str>) -> Scalar {

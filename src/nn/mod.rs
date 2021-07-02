@@ -12,6 +12,7 @@ mod lenet;
 mod nin;
 mod run;
 pub mod zk;
+mod nn_serialize;
 
 fn convolution_layer_act_compact(c: &mut ConstraintSystem, input: TensorAddress, kernel: [u32;2], feature: u32, bias_scale: u32, max_bits: u8, act: ActivationFunction) -> (TensorAddress, TensorAddress, TensorAddress) {
     let (row, col) = (c.mem[input].dim[1], c.mem[input].dim[2]);

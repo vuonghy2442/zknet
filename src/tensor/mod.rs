@@ -1,3 +1,5 @@
+mod tensor_serialize;
+
 use std::iter::Iterator;
 use std::ops::{Range, RangeFrom, RangeTo};
 use serde::{Serialize, Deserialize};

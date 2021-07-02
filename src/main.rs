@@ -3,6 +3,7 @@ mod r1cs;
 mod nn;
 mod scalar;
 mod io;
+mod serialize;
 
 use std::path::Path;
 
@@ -110,14 +111,14 @@ fn main() {
                 &nn,
                 m.value_of("OUTPUT").unwrap(),
                 m.value_of("compress").unwrap().parse().expect("Compression level is an integer")
-            ).expect("Cannot save the BNN to file");
+            );
         },
         ("gen_open", Some(m)) => {
             let open = io::generate_open(m.value_of("message"));
             io::save_to_file(open, m.value_of("OPEN_PATH").unwrap()).unwrap();
         },
         ("run", Some(m)) => {
-            let nn = io::zknet_load(m.value_of("CIRCUIT_PATH").unwrap()).unwrap();
+            let nn = io::zknet_load(m.value_of("CIRCUIT_PATH").unwrap());
             println!("Done loading neural network");
             let open: Scalar = io::load_from_file(m.value_of("OPEN_PATH").unwrap()).unwrap();
             let weight_path: &str = m.value_of("WEIGHT_PATH").unwrap();
@@ -129,7 +130,7 @@ fn main() {
             nn.run_dataset(open, weight_path, dataset_path, &ids, verify, output_path.unwrap(), compress);
         },
         ("proof", Some(m)) => {
-            let nn = io::zknet_load(m.value_of("CIRCUIT_PATH").unwrap()).unwrap();
+            let nn = io::zknet_load(m.value_of("CIRCUIT_PATH").unwrap());
             println!("Done loading neural network");
 
             let witness_path: &str = m.value_of("WITNESS_PATH").unwrap();
@@ -154,7 +155,7 @@ fn main() {
 
         },
         ("verify", Some(m)) => {
-            let nn = io::zknet_load(m.value_of("CIRCUIT_PATH").unwrap()).unwrap();
+            let nn = io::zknet_load(m.value_of("CIRCUIT_PATH").unwrap());
             let (inst, gens) = nn.get_nizk_instance();
             println!("Done loading neural network");
             let proves = nn::zk::get_proves(m.value_of("PROOF_PATH").unwrap(),m.value_of("IO_PATH").unwrap());

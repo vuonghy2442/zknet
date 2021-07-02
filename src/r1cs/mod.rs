@@ -16,6 +16,7 @@ mod poseidon;
 pub mod elliptic_curve;
 mod sum_pool;
 mod packing;
+mod cs_serialize;
 
 type ScalarAddress = u32;
 pub type TensorAddress = u32;
