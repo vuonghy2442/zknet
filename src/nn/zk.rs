@@ -63,7 +63,7 @@ pub fn get_witnesses(path: &str) -> Vec<(String, String, usize)> {
             }
         }
     };
-    res.sort_unstable();
+    res.sort_unstable_by_key(|x| x.2);
     res
 }
 
@@ -109,7 +109,7 @@ pub fn get_proves(proof_path: &str, io_path: &str) -> Vec<(String, String, Proof
             }
         }
     };
-    res.sort_unstable();
+    res.sort_unstable_by_key( |x| x.3);
     res
 }
 
