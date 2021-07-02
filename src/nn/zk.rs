@@ -17,17 +17,21 @@ pub enum ProofType {
 
 impl NeuralNetwork {
     pub fn get_nizk_instance(&self) -> (Instance, NIZKGens) {
+        let start = quanta::Instant::now();
         let inst = self.cons.get_spartan_instance();
         let gens = NIZKGens::new(self.cons.cons_size() as usize,  self.cons.get_num_vars(), self.cons.get_num_inputs());
-        info!("Done encoding nizk");
+        let dur = quanta::Instant::now() - start;
+        info!("Done encoding nizk in {}", dur.as_secs_f64());
         (inst, gens)
     }
 
     pub fn get_snark_instance(&self) -> (Instance, SNARKGens, ComputationCommitment, ComputationDecommitment) {
+        let start = quanta::Instant::now();
         let inst = self.cons.get_spartan_instance();
         let gens = SNARKGens::new(self.cons.cons_size() as usize,   self.cons.get_num_vars(), self.cons.get_num_inputs(),self.cons.get_non_zeros());
         let (comm, decomm) = SNARK::encode(&inst, &gens);
-        info!("Done encoding snark");
+        let dur = quanta::Instant::now() - start;
+        info!("Done encoding snark in {}", dur.as_secs_f64());
         (inst,gens,comm,decomm)
     }
 }
