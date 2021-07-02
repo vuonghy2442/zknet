@@ -20,10 +20,10 @@ use crate::nn::zk::ProofType;
 use simplelog::*;
 
 fn main() {
-    let matches = App::new("Zero knowledge network").version("0.1").setting(clap::AppSettings::ArgRequiredElseHelp)
+    let matches = App::new("Zero knowledge network").version("0.1").setting(clap::AppSettings::SubcommandRequiredElseHelp)
                             .author("Hy Vuong, Lam Nguyen")
                             .about("Compile binary neural networks to R1CS")
-                            .arg(Arg::with_name("verbose").short("v").multiple(true))
+                            .arg(Arg::with_name("verbose").short("v").multiple(true).help("verbosity (number of occurence)"))
                             .subcommand(SubCommand::with_name("generate")
                                     .about("Generate R1CS and computation circuit from example binary neural network")
                                     .arg(Arg::with_name("BNN_TYPE")

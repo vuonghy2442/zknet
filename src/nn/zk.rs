@@ -10,6 +10,7 @@ use crate::io::{self, load_scalar_array};
 
 use super::NeuralNetwork;
 
+#[derive(Ord, PartialOrd, PartialEq, Eq)]
 pub enum ProofType {
     NIZK,
     SNARK
@@ -63,6 +64,7 @@ pub fn get_witnesses(path: &str) -> Vec<(String, String, usize)> {
             }
         }
     };
+    res.sort_unstable();
     res
 }
 
@@ -108,6 +110,7 @@ pub fn get_proves(proof_path: &str, io_path: &str) -> Vec<(String, String, Proof
             }
         }
     };
+    res.sort_unstable();
     res
 }
 
@@ -117,7 +120,7 @@ pub fn prove_nizk(inst: &Instance, gens: &NIZKGens, witness_path: &str, io_path:
     let assignment_vars = VarsAssignment::new(&vars).unwrap();
     let assignment_inps = VarsAssignment::new(&inps).unwrap();
 
-    info!("[+] Calculating nizk proof for sample {}", id);
+    info!("Calculating nizk proof for sample {}", id);
     let mut prover_transcript = Transcript::new(b"nizk_example");
     let proof = NIZK::prove(
         &inst,
@@ -128,14 +131,17 @@ pub fn prove_nizk(inst: &Instance, gens: &NIZKGens, witness_path: &str, io_path:
     );
 
     io::save_to_file(proof, save_path).unwrap();
-    info!("[+] Writen nizk proof to {}", save_path);
+    info!("Writen nizk proof to {}", save_path);
 }
 
 pub fn verify_nizk(inst: &Instance, gens: &NIZKGens, proof: NIZK, io_path: &str) -> bool {
     let inps: Vec<[u8; 32]> = load_scalar_array(io_path).unwrap().to_vec();
     let assignment_inps = VarsAssignment::new(&inps).unwrap();
     let mut verifier_transcript = Transcript::new(b"nizk_example");
-    proof.verify(inst, &assignment_inps, &mut verifier_transcript, gens).is_ok()
+    info!("Done loading data");
+    let res = proof.verify(inst, &assignment_inps, &mut verifier_transcript, gens).is_ok();
+    info!("Done verified: {}", if res {"valid"} else {"invalid"});
+    res
 }
 
 pub fn prove_snark(inst: &Instance, gens: &SNARKGens, decomm: &ComputationDecommitment, witness_path: &str, io_path: &str, id: usize, save_path: &str) {
@@ -144,7 +150,7 @@ pub fn prove_snark(inst: &Instance, gens: &SNARKGens, decomm: &ComputationDecomm
     let assignment_vars = VarsAssignment::new(&vars).unwrap();
     let assignment_inps = VarsAssignment::new(&inps).unwrap();
 
-    info!("[+] Calculating snark proof for sample {}", id);
+    info!("Calculating snark proof for sample {}", id);
     let mut prover_transcript = Transcript::new(b"nizk_example");
     let proof = SNARK::prove(
         &inst,
@@ -156,7 +162,7 @@ pub fn prove_snark(inst: &Instance, gens: &SNARKGens, decomm: &ComputationDecomm
     );
 
     io::save_to_file(proof, save_path).unwrap();
-    info!("[+] Writen snark proof to {}", save_path);
+    info!("Writen snark  proof to {}", save_path);
 }
 
 pub fn verify_snark(gens: &SNARKGens, comm: &ComputationCommitment, proof: SNARK, io_path: &str) -> bool {
