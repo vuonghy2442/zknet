@@ -1,6 +1,5 @@
 use crate::r1cs::ConstraintSystem;
 use crate::r1cs::{TensorAddress, ActivationFunction};
-use core::num;
 use std::cmp::max;
 use std::convert::TryInto;
 use std::path::Path;

@@ -236,7 +236,7 @@ fn main() {
                 Some("snark") => {
                     let (inst, gens, comm, decomm) = nn.get_snark_instance();
                     for (witness, io, id) in witnesses {
-                        nn::zk::prove_snark(&inst, &gens, &decomm, &witness, &io, id, output_path.join(format!("proof_snark_{}", id)).to_str().unwrap())
+                        nn::zk::prove_and_verify_snark(&inst, &gens, &decomm, &comm, &witness, &io, id, output_path.join(format!("proof_snark_{}", id)).to_str().unwrap())
                     }
                 },
                 _ => {}
