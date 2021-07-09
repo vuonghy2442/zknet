@@ -10,7 +10,9 @@ use crate::scalar::Scalar;
 use std::collections::HashMap;
 
 mod lenet;
+mod lenet_unoptimized;
 mod nin;
+mod nin_unoptimized;
 mod run;
 pub mod zk;
 mod nn_serialize;
@@ -156,7 +158,9 @@ pub fn load_dataset(path: &str) -> (Vec<Vec<i32>>, Vec<u8>) {
 
 pub enum NeuralNetworkType {
     LeNet,
-    NetworkInNetwork
+    LeNetUnoptimzied,
+    NetworkInNetwork,
+    NetworkInNetworkUnoptimzied
 }
 
 
@@ -228,7 +232,9 @@ impl NeuralNetwork {
     pub fn zknet_factory(network: NeuralNetworkType, accuracy: bool) -> NeuralNetwork {
         match network {
             NeuralNetworkType::LeNet => NeuralNetwork::new_lenet(accuracy),
-            NeuralNetworkType::NetworkInNetwork => NeuralNetwork::new_nin(accuracy)
+            NeuralNetworkType::LeNetUnoptimzied => NeuralNetwork::new_lenet_unoptimized(accuracy),
+            NeuralNetworkType::NetworkInNetwork => NeuralNetwork::new_nin(accuracy),
+            NeuralNetworkType::NetworkInNetworkUnoptimzied => NeuralNetwork::new_nin_unoptimized(accuracy)
         }
     }
 }

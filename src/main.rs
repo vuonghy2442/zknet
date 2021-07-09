@@ -185,12 +185,10 @@ fn main() {
     match matches.subcommand() {
         ("generate", Some(m)) => {
             let nn_type = match m.value_of("BNN_TYPE").unwrap() {
-                "lenet" => {
-                    NeuralNetworkType::LeNet
-                },
-                "nin" => {
-                    NeuralNetworkType::NetworkInNetwork
-                }
+                "lenet" => NeuralNetworkType::LeNet,
+                "nin" => NeuralNetworkType::NetworkInNetwork,
+                "lenet_unoptimized" => NeuralNetworkType::LeNetUnoptimzied,
+                "nin_unoptimized" => NeuralNetworkType::NetworkInNetworkUnoptimzied,
                 x => {error!("Unknown neural network type {}", x); panic!()}
             };
             let acc = m.is_present("accuracy");
