@@ -21,7 +21,7 @@ impl NeuralNetwork {
         c.log_cons("conv1_sign");
         let pool1 = max_pool(&mut c, conv1_out_sign); // 12 x 12
         c.log_cons("pool1");
-        let (conv2_out, conv2_weight, conv2_bias) = convolution_layer(&mut c, pool1, [5,5], 20, 0); // 24 x 24
+        let (conv2_out, conv2_weight, conv2_bias) = convolution_layer(&mut c, pool1, [5,5], 50, 0); // 24 x 24
         c.log_cons("conv2");
         let conv2_out_sign = sign_activation(&mut c, conv2_out, 9);
         c.log_cons("conv2_sign");
